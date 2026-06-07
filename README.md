@@ -7,13 +7,11 @@ Wio-SX1262 — over a UART / USB-serial link and exchange channel messages, set
 channel PSKs, and read link metadata. Your host plays the *client*, the companion
 radio plays the *server* — the inverse of the phone/web app.
 
-Sibling of [`meshcore.js`](https://github.com/meshcore-dev/meshcore.js) (JS) and
-`meshcore_py` (Python): this is the **C / C++** one.
+This is the **C / C++** one. Sibling implementations in other languages:
 
-SEE ALSO:
-* RUST - meshcore-rs (aka meschore_rs) - https://github.com/andrewdavidmackenzie/meshcore-rs.git
-* Javascript - meshcore.js - https://github.com/meshcore-dev/meshcore.js
-* Python - meshcore_py - https://github.com/meshcore-dev/meshcore_py
+- **JavaScript** — [`meshcore.js`](https://github.com/meshcore-dev/meshcore.js)
+- **Python** — [`meshcore_py`](https://github.com/meshcore-dev/meshcore_py)
+- **Rust** — [`meshcore-rs`](https://github.com/andrewdavidmackenzie/meshcore-rs)
 
 ## Two ways to use this repo
 
