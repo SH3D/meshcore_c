@@ -1,0 +1,19 @@
+{
+  "name": "MeshCoreCompanion",
+  "version": "0.1.0",
+  "description": "Client library for the MeshCore Companion Radio serial protocol. Portable C99 core (no I/O, no malloc, host-testable) with a thin Arduino C++ wrapper that connects a host MCU to a separate MeshCore companion radio over UART/USB serial. Receive and send on channels, set channel PSKs, read SNR/path metadata.",
+  "keywords": ["meshcore", "lora", "companion", "serial", "mesh", "sx1262", "esp32", "nrf52"],
+  "authors": [
+    { "name": "Scott Penrose", "maintainer": true }
+  ],
+  "license": "MIT",
+  "frameworks": ["arduino"],
+  "platforms": ["espressif32", "nordicnrf52", "raspberrypi", "ststm32"],
+  "headers": ["MeshCoreCompanion.h", "meshcore_companion.h"],
+  "build": {
+    "srcFilter": ["+<*.c>", "+<*.cpp>"]
+  },
+  "examples": [
+    { "name": "SensorChannelBridge", "base": "examples/SensorChannelBridge", "files": ["SensorChannelBridge.ino"] }
+  ]
+}

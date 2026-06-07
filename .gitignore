@@ -1,0 +1,18 @@
+# CMake / native build output
+/build/
+*.o
+*.a
+
+# Host test/example binaries
+/test/t
+/meshcore_tty
+
+# PlatformIO
+.pio/
+
+# Local design scratch (chat transcript, not a repo artifact)
+/STRUCTURE.md
+
+# Editor / OS noise
+.DS_Store
+.vscode/
