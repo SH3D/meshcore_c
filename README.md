@@ -10,6 +10,11 @@ radio plays the *server* — the inverse of the phone/web app.
 Sibling of [`meshcore.js`](https://github.com/meshcore-dev/meshcore.js) (JS) and
 `meshcore_py` (Python): this is the **C / C++** one.
 
+SEE ALSO:
+* RUST - meshcore-rs (aka meschore_rs) - https://github.com/andrewdavidmackenzie/meshcore-rs.git
+* Javascript - meshcore.js - https://github.com/meshcore-dev/meshcore.js
+* Python - meshcore_py - https://github.com/meshcore-dev/meshcore_py
+
 ## Two ways to use this repo
 
 The protocol logic is a single portable **C99 core** with no I/O, no `malloc`, and
@@ -19,10 +24,9 @@ two audiences from **one source of truth** (`src/meshcore_companion.{c,h}`):
 1. **Portable C library** — drop `src/meshcore_companion.{c,h}` into any project.
    It assembles inbound frames from a byte stream, builds outbound command frames
    into buffers you own, and parses payloads into plain structs. You supply the
-   transport. A complete Linux example (POSIX `termios`) lives in
-   `examples-linux/`, and the host unit test in `test/` runs with no hardware.
-   The same core drops into ESP-IDF, bare nRF52/STM32, or any host bridge
-   unchanged (those examples are planned).
+   transport. The same core drops into Linux, ESP-IDF, bare STM32/nRF52, or any
+   host bridge unchanged — see the example for each platform under `examples-*/`,
+   plus the host unit test in `test/` that runs with no hardware.
 
 2. **C++ Arduino library** — `src/MeshCoreCompanion.{h,cpp}` wrap the core in an
    Arduino-friendly class: inject any `Stream` (`Serial1` on a Grove UART, USB
@@ -45,10 +49,17 @@ meshcore_c/
 ├── examples/
 │   └── SensorChannelBridge/      # Arduino sketch (.ino)
 ├── examples-linux/
-│   └── tty_bridge/               # portable C example: any Linux tty (USB or raw UART)
+│   └── tty_bridge/               # portable C: any Linux tty (USB or raw UART)
+├── examples-esp-idf/
+│   └── tty_bridge/               # portable C: ESP-IDF UART driver (esp32/s3/c3)
+├── examples-stm32/
+│   └── uart_bridge/              # portable C: STM32 HAL UART drop-in
 └── test/
     └── test_codec.c              # host unit test (no hardware)
 ```
+
+The portable-C examples all compile the *same* `src/meshcore_companion.c`; only
+the byte transport differs per platform.
 
 The Arduino/PlatformIO build only compiles `src/` (the manifests' `srcFilter` is
 scoped there), so the Linux example and host test never enter a firmware build.
@@ -83,6 +94,26 @@ Or compile the example directly, no CMake:
 cc -std=c99 -Wall -Wextra -Isrc \
    examples-linux/tty_bridge/meshcore_tty.c src/meshcore_companion.c -o meshcore_tty
 ```
+
+## Other platform examples (same C core)
+
+Each example compiles `src/meshcore_companion.c` directly and supplies only a
+platform-specific UART transport — no copy of the core is kept anywhere.
+
+- **ESP-IDF** — `examples-esp-idf/tty_bridge/`. A full IDF project using the UART
+  driver:
+  ```sh
+  cd examples-esp-idf/tty_bridge
+  idf.py set-target esp32s3 && idf.py build flash monitor
+  ```
+- **STM32** — `examples-stm32/uart_bridge/`. A HAL drop-in (STM32 builds are
+  board/toolchain specific): add `meshcore_stm32.c` + `src/` to a CubeMX/CubeIDE
+  project and call `meshcore_setup()` / `meshcore_poll()` from `main()`. See its
+  README.
+
+The transport is just two operations — *write bytes* and *read available bytes* —
+so porting to bare-metal STM32, nRF52 (nRF5 SDK or Zephyr), or any other MCU only
+changes those calls; the protocol code is identical.
 
 ## Use the Arduino library
 
