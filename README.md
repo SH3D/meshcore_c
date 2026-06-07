@@ -1,136 +1,52 @@
-# meshcore_c
+# MeshCoreCompanion
 
-A client for the **MeshCore Companion Radio** serial protocol, for when the radio
-lives on one device and your application (display, sensor hub, gateway, desktop
-tool) lives on another. Talk to a separate companion radio — e.g. a Seeed XIAO +
-Wio-SX1262 — over a UART / USB-serial link and exchange channel messages, set
-channel PSKs, and read link metadata. Your host plays the *client*, the companion
-radio plays the *server* — the inverse of the phone/web app.
+A client library for the **MeshCore Companion Radio** serial protocol, for when
+the radio lives on one MCU and your application (display, sensor hub, gateway)
+lives on another. Talk to a separate companion radio — e.g. a Seeed XIAO +
+Wio-SX1262 — over a UART/USB serial link and exchange channel messages, set
+channel PSKs, and read link metadata.
 
-This is the **C / C++** one. Sibling implementations in other languages:
+This is the inverse of the phone/web app: your host MCU plays the *client*, the
+companion radio plays the *server*.
 
-- **JavaScript** — [`meshcore.js`](https://github.com/meshcore-dev/meshcore.js)
-- **Python** — [`meshcore_py`](https://github.com/meshcore-dev/meshcore_py)
-- **Rust** — [`meshcore-rs`](https://github.com/andrewdavidmackenzie/meshcore-rs)
+## Design: portable C core + Arduino wrapper
 
-## Two ways to use this repo
+Two layers, so the protocol is reusable and testable far beyond Arduino:
 
-The protocol logic is a single portable **C99 core** with no I/O, no `malloc`, and
-no Arduino dependency. Everything else is a thin layer over it, so one repo serves
-two audiences from **one source of truth** (`src/meshcore_companion.{c,h}`):
+- **`meshcore_companion.h/.c`** — a portable **C99** core. No I/O, no `malloc`,
+  no Arduino. It assembles inbound frames from a byte stream, builds outbound
+  command frames into buffers you own, and parses payloads into plain structs.
+  It compiles and runs on a desktop for unit testing (see `test/`), and drops
+  into ESP-IDF, bare nRF52/STM32, or a host bridge unchanged.
+- **`MeshCoreCompanion.h/.cpp`** — a thin C++ wrapper. Inject any `Stream`
+  (`Serial1` on a Grove UART, USB CDC, `SoftwareSerial`), call `loop()` often,
+  register lambda callbacks. It also **auto-drains** the radio's queue: on the
+  `MsgWaiting` push it loops `SyncNextMessage` until empty, so you just receive
+  `onChannelMessage(...)`.
 
-1. **Portable C library** — drop `src/meshcore_companion.{c,h}` into any project.
-   It assembles inbound frames from a byte stream, builds outbound command frames
-   into buffers you own, and parses payloads into plain structs. You supply the
-   transport. The same core drops into Linux, ESP-IDF, bare STM32/nRF52, or any
-   host bridge unchanged — see the example for each platform under `examples-*/`,
-   plus the host unit test in `test/` that runs with no hardware.
-
-2. **C++ Arduino library** — `src/MeshCoreCompanion.{h,cpp}` wrap the core in an
-   Arduino-friendly class: inject any `Stream` (`Serial1` on a Grove UART, USB
-   CDC, `SoftwareSerial`), call `loop()` often, register lambda callbacks. It
-   **auto-drains** the radio's queue: on the `MsgWaiting` push it loops
-   `SyncNextMessage` until empty, so you just receive `onChannelMessage(...)`.
-   The repo root is a publishable Arduino / PlatformIO library
-   (`library.properties` + `library.json`).
-
-## Layout
-
-```
-meshcore_c/
-├── library.properties   # Arduino IDE / Library Manager metadata
-├── library.json         # PlatformIO metadata
-├── CMakeLists.txt       # Linux / native (host) build of the C core + examples + test
-├── src/
-│   ├── meshcore_companion.h/.c   # portable C99 core — single source of truth
-│   └── MeshCoreCompanion.h/.cpp  # C++ Arduino wrapper (built by Arduino/PlatformIO)
-├── examples/
-│   └── SensorChannelBridge/      # Arduino sketch (.ino)
-├── examples-linux/
-│   └── tty_bridge/               # portable C: any Linux tty (USB or raw UART)
-├── examples-esp-idf/
-│   └── tty_bridge/               # portable C: ESP-IDF UART driver (esp32/s3/c3)
-├── examples-stm32/
-│   └── uart_bridge/              # portable C: STM32 HAL UART drop-in
-└── test/
-    └── test_codec.c              # host unit test (no hardware)
-```
-
-The portable-C examples all compile the *same* `src/meshcore_companion.c`; only
-the byte transport differs per platform.
-
-The Arduino/PlatformIO build only compiles `src/` (the manifests' `srcFilter` is
-scoped there), so the Linux example and host test never enter a firmware build.
-The CMake build only compiles the pure-C parts and ignores the Arduino wrapper
-(which needs `<Arduino.h>`) and the manifests.
+Transport is injected; the core never touches a port. "Physical serial only" is
+simply which `Stream` you hand the wrapper.
 
 ## Wire protocol
 
 `frame = [type:u8][len:u16 LE][payload:len bytes]`, type `0x3C` for app→radio,
-`0x3E` for radio→app. `payload[0]` is the command/response/push code. Derived from
-the MeshCore companion protocol and the `meshcore.js` reference client.
+`0x3E` for radio→app. `payload[0]` is the command/response/push code. Derived
+from the MeshCore companion protocol and the `meshcore.js` reference client.
+
+## Install (PlatformIO)
+
+Drop this folder into your project's `lib/`, or add to `platformio.ini`:
+
+```ini
+lib_deps = symlink:///path/to/MeshCoreCompanion
+```
 
 The companion radio must be flashed with the **serial** companion variant
-(`companion_radio_usb`) and have its serial interface bound to the port you wire
-to — not BLE, and not the WiFi/TCP variant. Companions compile in one interface at
-a time.
+(`companion_radio_usb`) and have its serial interface bound to the UART you wire
+to — not BLE, and not the WiFi/TCP variant. Companions compile in one interface
+at a time. If you are using an OS (e.g. Linux) you can use USB variant as the drivers will present a /dev/ttyX interface that looks same as serial. If wanting to use bare metal evices such as AVR/ESP32/nRF52/STM serial, then see notes below about changes to radio.
 
-## Build & run the C library (Linux / host)
-
-```sh
-cmake -B build && cmake --build build
-ctest --test-dir build --output-on-failure     # run the codec unit test
-
-./build/meshcore_tty /dev/ttyACM0              # USB-CDC companion
-./build/meshcore_tty /dev/ttyUSB0 2 000102030405060708090a0b0c0d0e0f sensors
-#                    ^tty         ^ch ^16-byte PSK (32 hex chars)        ^name
-```
-
-Or compile the example directly, no CMake:
-
-```sh
-cc -std=c99 -Wall -Wextra -Isrc \
-   examples-linux/tty_bridge/meshcore_tty.c src/meshcore_companion.c -o meshcore_tty
-```
-
-### Host test via PlatformIO
-
-The repo also ships a `platformio.ini` with a host `native` environment, so you
-can run the same codec test through PlatformIO with no hardware:
-
-```sh
-pio test -e native
-```
-
-This compiles only the portable C core (`src/*.c`) plus `test/test_codec.c`; the
-C++ Arduino wrapper is excluded (it needs `<Arduino.h>`). Pass/fail is driven by
-the test program's exit code via a tiny custom runner (`test/test_custom_runner.py`).
-
-## Other platform examples (same C core)
-
-Each example compiles `src/meshcore_companion.c` directly and supplies only a
-platform-specific UART transport — no copy of the core is kept anywhere.
-
-- **ESP-IDF** — `examples-esp-idf/tty_bridge/`. A full IDF project using the UART
-  driver:
-  ```sh
-  cd examples-esp-idf/tty_bridge
-  idf.py set-target esp32s3 && idf.py build flash monitor
-  ```
-- **STM32** — `examples-stm32/uart_bridge/`. A HAL drop-in (STM32 builds are
-  board/toolchain specific): add `meshcore_stm32.c` + `src/` to a CubeMX/CubeIDE
-  project and call `meshcore_setup()` / `meshcore_poll()` from `main()`. See its
-  README.
-
-The transport is just two operations — *write bytes* and *read available bytes* —
-so porting to bare-metal STM32, nRF52 (nRF5 SDK or Zephyr), or any other MCU only
-changes those calls; the protocol code is identical.
-
-## Use the Arduino library
-
-Install via PlatformIO (`lib_deps = symlink:///path/to/meshcore_c`), the Arduino
-Library Manager (once published), or by copying the repo into your `libraries/`
-folder. Then:
+## Quick start
 
 ```cpp
 #include "MeshCoreCompanion.h"
@@ -159,32 +75,44 @@ void loop() {
 }
 ```
 
-See `examples/SensorChannelBridge/` for a complete sketch.
-
 ## What's covered
 
-| Need | C core API | Arduino wrapper |
-|------|------------|-----------------|
-| Handshake / identity | `mc_cmd_app_start`, `mc_cmd_device_query` | `begin()`, `appStart()`, `deviceQuery()` → `onDeviceInfo`/`onSelfInfo` |
-| Receive channel text | `mc_parse` → `MC_RESP_CHANNEL_MSG_RECV` | `onChannelMessage` (auto-drained) |
-| Receive channel data + metadata | `mc_parse` → `MC_RESP_CHANNEL_DATA_RECV` | `onChannelData` (SNR, path, type) |
-| Send on a channel | `mc_cmd_send_channel_text` | `sendChannelText(idx, text)` |
-| Set / read channel PSK | `mc_cmd_set_channel`, `mc_cmd_get_channel` | `setChannel`, `setChannelHexSecret`, `getChannel` → `onChannelInfo` |
-| Device time | `mc_cmd_get/set_device_time` | `getDeviceTime`, `setDeviceTime`, `deviceEpochNow()` |
-| Adverts | `mc_cmd_send_self_advert` | `sendSelfAdvert(flood)` |
-| Radio params / stats | `mc_cmd_set_radio_params`, `mc_cmd_get_stats` | `getStats` |
+| Need | API |
+|------|-----|
+| Handshake / identity | `begin()`, `appStart()`, `deviceQuery()` → `onDeviceInfo`, `onSelfInfo` |
+| Receive channel text | `onChannelMessage` (auto-drained) |
+| Receive channel data + metadata | `onChannelData` (SNR, path length, data type) |
+| Send on a channel | `sendChannelText(idx, text)` |
+| Set / read channel PSK | `setChannel`, `setChannelHexSecret`, `getChannel` → `onChannelInfo` |
+| Device time | `getDeviceTime`, `setDeviceTime`, `deviceEpochNow()` |
+| Adverts | `sendSelfAdvert(flood)` |
+| Radio params / stats | `getStats`, plus `mc_cmd_set_radio_params` in the core |
 
-Adding a command the wrapper doesn't surface yet is one builder plus one `case`.
+The C core also exposes raw command builders and `mc_parse` for codes the
+wrapper doesn't surface yet (contacts, battery, send-confirmed, etc.) — adding a
+new command is one builder plus one `case`.
+
+## Testing the core (no hardware)
+
+```sh
+cd test
+cc -std=c99 -Wall -Wextra -I../src test_codec.c ../src/meshcore_companion.c -o t && ./t
+```
+
+Exercises command encoding, frame reassembly across split reads, every parser,
+and resync past line garbage.
 
 ## Notes
 
-- **Timestamps:** channel messages carry an epoch-seconds sender timestamp. Call
-  `getDeviceTime()` once so outgoing text can be stamped; otherwise it sends `0`.
-- **PSK derivation:** `set_channel` takes a raw 16-byte secret. Derive one from a
-  passphrase host-side (e.g. SHA-256 prefix, as `meshcore.js`'s transport-key util
-  shows) — kept out of the core to stay dependency-free.
-- **Buffer sizes:** override `MC_MAX_PAYLOAD`, `MC_MAX_TEXT`, `MC_MAX_DATA` before
-  including the header if your traffic needs more.
+- **Timestamps:** channel messages carry an epoch-seconds sender timestamp.
+  Call `getDeviceTime()` (or `setDeviceTime()`) once so `sendChannelText` can
+  stamp outgoing messages; otherwise it sends `0`.
+- **PSK derivation:** `setChannel` takes a raw 16-byte secret. If you need to
+  derive one from a passphrase, do it host-side (e.g. SHA-256 prefix, as
+  `meshcore.js`'s transport-key util shows) — kept out of the core to stay
+  dependency-free.
+- **Buffer sizes:** override `MC_MAX_PAYLOAD`, `MC_MAX_TEXT`, `MC_MAX_DATA`
+  before including the header if your traffic needs more.
 
 ## License
 
