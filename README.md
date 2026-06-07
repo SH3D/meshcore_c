@@ -93,6 +93,19 @@ cc -std=c99 -Wall -Wextra -Isrc \
    examples-linux/tty_bridge/meshcore_tty.c src/meshcore_companion.c -o meshcore_tty
 ```
 
+### Host test via PlatformIO
+
+The repo also ships a `platformio.ini` with a host `native` environment, so you
+can run the same codec test through PlatformIO with no hardware:
+
+```sh
+pio test -e native
+```
+
+This compiles only the portable C core (`src/*.c`) plus `test/test_codec.c`; the
+C++ Arduino wrapper is excluded (it needs `<Arduino.h>`). Pass/fail is driven by
+the test program's exit code via a tiny custom runner (`test/test_custom_runner.py`).
+
 ## Other platform examples (same C core)
 
 Each example compiles `src/meshcore_companion.c` directly and supplies only a
