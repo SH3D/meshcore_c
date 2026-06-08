@@ -14,6 +14,7 @@
     "srcFilter": ["+<*.c>", "+<*.cpp>"]
   },
   "examples": [
+    { "name": "AutoProvision", "base": "examples/AutoProvision", "files": ["platformio.ini", "src/main.cpp", "src/config.h"] },
     { "name": "SensorChannelBridge", "base": "examples/SensorChannelBridge", "files": ["SensorChannelBridge.ino"] }
   ]
 }

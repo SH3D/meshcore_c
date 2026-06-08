@@ -28,6 +28,10 @@
 extern "C" {
 #endif
 
+/* Library version. Keep in sync with library.json and library.properties;
+ * check_version.sh verifies all three match and that a git tag exists. */
+#define MESHCORE_COMPANION_VERSION "0.2.0"
+
 /* ---- Compile-time sizing (override before including if you need more) ---- */
 #ifndef MC_MAX_PAYLOAD
 #define MC_MAX_PAYLOAD   255   /* largest companion payload we will buffer    */
