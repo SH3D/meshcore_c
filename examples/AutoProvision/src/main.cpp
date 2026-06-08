@@ -75,6 +75,8 @@ static void provision() {
 
 void setup() {
     Serial.begin(115200);
+    delay(1000);
+    Serial.printf("[boot] test auto provision started\n");
     Serial1.begin(UART_BAUD, SERIAL_8N1, UART_RX_PIN, UART_TX_PIN);
 
     mc.onDeviceInfo([](const mc_device_info_t& d) {
