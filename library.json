@@ -1,12 +1,17 @@
 {
   "name": "MeshCoreCompanion",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Client library for the MeshCore Companion Radio serial protocol. Portable C99 core (no I/O, no malloc, host-testable) with a thin Arduino C++ wrapper that connects a host MCU to a separate MeshCore companion radio over UART/USB serial. Receive and send on channels, set channel PSKs, read SNR/path metadata.",
   "keywords": ["meshcore", "lora", "companion", "serial", "mesh", "sx1262", "esp32", "nrf52"],
   "authors": [
     { "name": "Scott Penrose", "maintainer": true }
   ],
   "license": "MIT",
+  "homepage": "https://gitea.sh3d.com.au/Sh3d/meshcore_c",
+  "repository": {
+    "type": "git",
+    "url": "https://gitea.sh3d.com.au/Sh3d/meshcore_c.git"
+  },
   "frameworks": ["arduino"],
   "platforms": ["espressif32", "nordicnrf52", "raspberrypi", "ststm32"],
   "headers": ["MeshCoreCompanion.h", "meshcore_companion.h"],

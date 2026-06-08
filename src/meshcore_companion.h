@@ -30,7 +30,7 @@ extern "C" {
 
 /* Library version. Keep in sync with library.json and library.properties;
  * check_version.sh verifies all three match and that a git tag exists. */
-#define MESHCORE_COMPANION_VERSION "0.2.0"
+#define MESHCORE_COMPANION_VERSION "0.2.1"
 
 /* ---- Compile-time sizing (override before including if you need more) ---- */
 #ifndef MC_MAX_PAYLOAD

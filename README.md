@@ -9,6 +9,10 @@ channel PSKs, and read link metadata.
 This is the inverse of the phone/web app: your host MCU plays the *client*, the
 companion radio plays the *server*.
 
+> The canonical repository is on Gitea at
+> <https://gitea.sh3d.com.au/Sh3d/meshcore_c>. A mirror is kept on GitHub at
+> <https://github.com/SH3D/meshcore_c> for **issues** and **pull requests**.
+
 ## Design: portable C core + Arduino wrapper
 
 Two layers, so the protocol is reusable and testable far beyond Arduino:
