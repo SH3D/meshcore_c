@@ -254,14 +254,15 @@ radio comes up configured with no manual steps:
 
 ```sh
 cd examples/AutoProvision
-pio run -e esp32-s3-devkitc-1 -t upload    # or: -e xiao-esp32s3 for a XIAO host
+pio run -e esp32-s3-devkitc-1 -t upload    # or -e xiao-esp32s3 / -e xiao-esp32c3
 pio device monitor
 ```
 
 It's a self-contained PlatformIO project (`platformio.ini` + `src/main.cpp`) with
-an env per host board — a generic ESP32-S3 dev board and a Seeed **XIAO
-ESP32-S3** (their host UART pins differ, since the XIAO doesn't break out
-GPIO17/18). The region is set the same way you'd compile MeshCore firmware —
+an env per host board — a generic ESP32-S3 dev board and the Seeed **XIAO
+ESP32-S3** / **XIAO ESP32-C3**. Their host UART pins differ (the XIAOs don't break
+out GPIO17/18), and the XIAOs have only native USB, so their envs route `Serial`
+to USB-CDC (`ARDUINO_USB_CDC_ON_BOOT=1`) — without that you get no serial monitor. The region is set the same way you'd compile MeshCore firmware —
 `LORA_FREQ` / `LORA_BW` / `LORA_SF` / `LORA_CR` / `LORA_TX_POWER` in
 `platformio.ini`'s `build_flags` (916.575 MHz / 62.5 kHz / SF7 / CR4/8 / 20 dBm).
 The code is plain Arduino C++, so you can rename `src/main.cpp` to
