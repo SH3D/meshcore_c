@@ -27,7 +27,19 @@ Two layers, so the protocol is reusable and testable far beyond Arduino:
 Transport is injected; the core never touches a port. "Physical serial only" is
 simply which `Stream` you hand the wrapper.
 
-XXX Add a why - because I want control from other embedded systems, talk about how I do compile meshcore directly in and juse use a SX??? lora modem, that however uses a lot of resources and memroy and some hardware doesn't have access to enough pins to do SPI. Also I write code that runs on low level embedded linux SBC or SOC that are dependent on C. 
+## Why talk to a companion radio?
+
+The alternative is to compile the full MeshCore stack into your own MCU and drive
+an SX-series LoRa modem (e.g. an SX1262) directly over SPI. That works, but it is
+heavy on flash and RAM, and it needs several free GPIOs for the SPI bus plus the
+radio's control/IRQ lines — pins many boards (or your own design) simply can't
+spare once a display, sensors and other peripherals are wired up.
+
+Running the radio as a *separate companion module* keeps all of that — the LoRa
+modem, mesh routing and crypto — on the radio, and lets your application talk to
+it over a single UART/USB serial link. Your host stays light, and because the
+core is plain C99 with no dependencies it runs equally on a small microcontroller
+or on a low-level embedded Linux SBC/SoC where C is the natural language.
 
 ## Wire protocol
 
@@ -153,13 +165,104 @@ cd test && cc -std=c99 -Wall -Wextra -I../src test_codec.c ../src/meshcore_compa
 The unit test exercises command encoding, frame reassembly across split reads,
 every parser, and resync past line garbage.
 
-## Raw Serial Port
+## Connecting to the radio: USB vs TTL serial
 
-For embedded linux, windows etc, there is USB drivvers that expose a serial port we can access from the raw c. But from a bare metal (or FreeRTOS etc) embedded CPU we need TTL serial port access. To do this is relatively simple on most of the MeshCore hardware supported for Companion mode, however can't be done from online flasher.
+On a desktop or SBC (Linux, Windows, macOS) the companion's USB driver exposes a
+serial port you open straight from C — `/dev/ttyACM0` and friends. From a
+bare-metal / FreeRTOS host there's no USB stack, so you wire the companion's
+**TTL UART** to a hardware serial port on your host. That's straightforward on
+most MeshCore companion hardware, but it can't be done from the online flasher —
+you have to build the firmware yourself.
 
-XXX How to build example, lets start with a XIAO ESP32S3 with SX1262. Minimum steps here to show somone how to do it and work out what pins can be used on that board for RX/TX
+### Build a serial companion (XIAO ESP32S3 + SX1262)
 
-And add a Arduino example (basic ESP32S3 dev) that also programs it, e.g. Name, Network to Australia Narrow band and to add a channel. Basically a zero config just plug it in and the host device sets it up how it needs. For completeness this examle code then loops watching the channel programmed and responding to any hello sent with a response.
+The companion firmware is built with [PlatformIO](https://platformio.org/), so
+you need its source. Clone the MeshCore firmware repo (VS Code + PlatformIO, or
+the `pio` CLI):
+
+```sh
+git clone https://github.com/ripplebiz/MeshCore
+cd MeshCore
+```
+
+A companion compiles in **one** host interface at a time, and the XIAO +
+Wio-SX1262 variant ships a ready-made environment for each — pick the **serial**
+one (no source edit needed):
+
+| PlatformIO environment | Host link |
+|---|---|
+| `Xiao_S3_WIO_companion_radio_usb`  | native USB-CDC |
+| `Xiao_S3_WIO_companion_radio_ble`  | BLE |
+| `Xiao_S3_WIO_companion_radio_wifi` | TCP / WiFi |
+| **`Xiao_S3_WIO_companion_radio_serial`** | **hardware UART ← use this** |
+
+The `…_serial` env already routes the command interface to `Serial1`: it sets
+`-D SERIAL_TX=D6 -D SERIAL_RX=D7` in `variants/xiao_s3_wio/platformio.ini`. Build
+and flash it over USB:
+
+```sh
+pio run -e Xiao_S3_WIO_companion_radio_serial -t upload
+```
+
+(If the upload can't find the board, put the XIAO in bootloader mode: hold **B**,
+tap **R**, release **B**.)
+
+Then wire the radio to your host — companion **D6 (TX, GPIO43) → host RX**,
+companion **D7 (RX, GPIO44) ← host TX**, **GND↔GND**. Those host pins are exactly
+what `UART_RX_PIN` / `UART_TX_PIN` select in the AutoProvision example. The
+Wio-SX1262 hat uses the SPI bus (D8–D10) plus GPIO38–42 for the radio, so D6/D7
+(and D0–D5) stay free; to use a different pair just override `SERIAL_TX` /
+`SERIAL_RX` in that env's `build_flags`.
+
+### XIAO nRF52840 + SX1262
+
+The `xiao_nrf52` variant is also a XIAO + SX1262, but it only ships
+`companion_radio_usb` and `companion_radio_ble` — so how you connect decides how
+much work it is:
+
+- **Host over USB → already works.** Flash `Xiao_nrf52_companion_radio_usb`:
+  ```sh
+  pio run -e Xiao_nrf52_companion_radio_usb -t upload
+  ```
+  The nRF52840's native USB-CDC enumerates as `/dev/ttyACM*`, which is a serial
+  port like any other — the Linux examples and AutoProvision work unchanged. No
+  firmware edit needed.
+
+- **Host needs raw TTL UART → small firmware edit.** Unlike the ESP32-S3/RP2040,
+  the nRF52 path in `examples/companion_radio/main.cpp` only does
+  `serial_interface.begin(Serial)` (USB-CDC); the `SERIAL_RX`/`SERIAL_TX`
+  HardwareSerial route is guarded to ESP32/RP2040 only, so adding those flags on
+  nRF52 does nothing. To expose a TTL UART, bind `Serial1` in that `#else` branch:
+  ```cpp
+  Serial1.setPins(/*rx*/D7, /*tx*/D6);
+  Serial1.begin(115200);
+  serial_interface.begin(Serial1);   // instead of begin(Serial)
+  ```
+  (On the XIAO nRF52840 `Serial1` defaults to D6/D7 under the Adafruit core, but
+  `setPins` makes it explicit.) It's a few lines, mirroring the ESP32 path.
+
+Either way the host-side code here is identical — a USB-CDC companion and a
+TTL-UART companion look the same to this library.
+
+### Zero-config provisioning from the host
+
+`examples/AutoProvision/` is a plug-and-go host (basic ESP32-S3 dev board): on
+boot it programs the companion the way it wants — node name, the **AU narrow
+band** region, and a channel — then loops watching that channel and replies to
+any `hello` with a response. Wire it to the companion's UART, flash, and the
+radio comes up configured with no manual steps:
+
+```sh
+cd examples/AutoProvision
+pio run -t upload && pio device monitor
+```
+
+It's a self-contained PlatformIO project (`platformio.ini` + `src/main.cpp`). The
+region is set the same way you'd compile MeshCore firmware — `LORA_FREQ` /
+`LORA_BW` / `LORA_SF` / `LORA_CR` / `LORA_TX_POWER` in `platformio.ini`'s
+`build_flags` (916.575 MHz / 62.5 kHz / SF7 / CR4/8 / 20 dBm). The code is plain
+Arduino C++, so you can rename `src/main.cpp` to `AutoProvision.ino` for the
+Arduino IDE instead.
 
 ## Notes
 

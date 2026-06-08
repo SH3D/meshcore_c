@@ -50,6 +50,10 @@ public:
     void getDeviceTime();
     void setDeviceTime(uint32_t epochSecs);
     void sendSelfAdvert(bool flood = true);
+    /* Provisioning: node name, radio region, tx power. */
+    void setAdvertName(const char *name);
+    void setRadioParams(float freqMHz, float bwKHz, uint8_t sf, uint8_t cr);
+    void setTxPower(uint32_t dbm);
     void getChannel(uint8_t idx);
     void setChannel(uint8_t idx, const char *name, const uint8_t secret[MC_SECRET_LEN]);
     /* Set a channel using a 32-hex-char PSK string (-> 16 bytes). false if malformed. */

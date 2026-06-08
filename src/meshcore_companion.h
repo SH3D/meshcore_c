@@ -208,6 +208,10 @@ size_t mc_cmd_send_cmd         (uint8_t *out, size_t cap, uint32_t sender_ts,
                                 const char *cmd);
 size_t mc_cmd_set_radio_params (uint8_t *out, size_t cap, uint32_t freq_hz_x1000,
                                 uint32_t bw, uint8_t sf, uint8_t cr);
+/* Node name shown in adverts (cmd 8). */
+size_t mc_cmd_set_advert_name  (uint8_t *out, size_t cap, const char *name);
+/* Radio TX power in dBm (cmd 12). */
+size_t mc_cmd_set_tx_power     (uint8_t *out, size_t cap, uint32_t dbm);
 size_t mc_cmd_get_stats        (uint8_t *out, size_t cap, uint8_t stats_type);
 
 /* ---- contacts (Phase 2) ---- */

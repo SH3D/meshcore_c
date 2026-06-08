@@ -252,6 +252,20 @@ size_t mc_cmd_set_radio_params(uint8_t *out, size_t cap, uint32_t freq_hz_x1000,
     return i;
 }
 
+size_t mc_cmd_set_advert_name(uint8_t *out, size_t cap, const char *name) {
+    size_t nlen = name ? strlen(name) : 0;
+    size_t total = 1 + nlen;
+    if (cap < total) return 0;
+    out[0] = MC_CMD_SET_ADVERT_NAME;
+    if (nlen) memcpy(out + 1, name, nlen);
+    return total;
+}
+
+size_t mc_cmd_set_tx_power(uint8_t *out, size_t cap, uint32_t dbm) {
+    if (cap < 5) return 0;
+    out[0] = MC_CMD_SET_TX_POWER; put_u32(out + 1, dbm); return 5;
+}
+
 size_t mc_cmd_get_stats(uint8_t *out, size_t cap, uint8_t stats_type) {
     if (cap < 2) return 0;
     out[0] = MC_CMD_GET_STATS; out[1] = stats_type; return 2;

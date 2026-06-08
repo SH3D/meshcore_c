@@ -128,6 +128,22 @@ void MeshCoreCompanion::getStats(uint8_t statsType) {
     uint8_t p[2]; sendPayload(p, mc_cmd_get_stats(p, sizeof(p), statsType));
 }
 
+/* ---- provisioning ---- */
+void MeshCoreCompanion::setAdvertName(const char *name) {
+    uint8_t p[1 + MC_MAX_TEXT];
+    sendPayload(p, mc_cmd_set_advert_name(p, sizeof(p), name));
+}
+void MeshCoreCompanion::setRadioParams(float freqMHz, float bwKHz, uint8_t sf, uint8_t cr) {
+    /* wire units: freq = MHz*1000 (kHz), bw = kHz*1000 (Hz) */
+    uint32_t freq = (uint32_t)(freqMHz * 1000.0f + 0.5f);
+    uint32_t bw   = (uint32_t)(bwKHz   * 1000.0f + 0.5f);
+    uint8_t p[11];
+    sendPayload(p, mc_cmd_set_radio_params(p, sizeof(p), freq, bw, sf, cr));
+}
+void MeshCoreCompanion::setTxPower(uint32_t dbm) {
+    uint8_t p[5]; sendPayload(p, mc_cmd_set_tx_power(p, sizeof(p), dbm));
+}
+
 /* ---- contacts ---- */
 void MeshCoreCompanion::getContacts(uint32_t sinceLastmod) {
     uint8_t p[5]; sendPayload(p, mc_cmd_get_contacts(p, sizeof(p), sinceLastmod));

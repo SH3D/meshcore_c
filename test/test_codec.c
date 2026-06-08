@@ -415,6 +415,22 @@ int main(void) {
               "parse_status fields");
     }
 
+    printf("== build: provisioning (name / radio / tx power) ==\n");
+    {
+        plen = mc_cmd_set_advert_name(scratch, sizeof scratch, "MyNode");
+        CHECK(plen == 7 && scratch[0] == MC_CMD_SET_ADVERT_NAME &&
+              memcmp(scratch + 1, "MyNode", 6) == 0, "set_advert_name");
+        plen = mc_cmd_set_tx_power(scratch, sizeof scratch, 20);
+        CHECK(plen == 5 && scratch[0] == MC_CMD_SET_TX_POWER && scratch[1] == 20 &&
+              scratch[2] == 0 && scratch[4] == 0, "set_tx_power (u32 LE)");
+        /* AU narrowband: 916.575 MHz -> 916575 (0x000DFC5F), 62.5 kHz -> 62500 (0xF424) */
+        plen = mc_cmd_set_radio_params(scratch, sizeof scratch, 916575, 62500, 7, 8);
+        CHECK(plen == 11 && scratch[0] == MC_CMD_SET_RADIO_PARAMS &&
+              scratch[1] == 0x5F && scratch[2] == 0xFC && scratch[3] == 0x0D && scratch[4] == 0x00 &&
+              scratch[5] == 0x24 && scratch[6] == 0xF4 && scratch[9] == 7 && scratch[10] == 8,
+              "set_radio_params freq/bw LE + sf/cr");
+    }
+
     printf("== resync: garbage before a valid frame ==\n");
     uint8_t junk[3] = { 0x00, 0x99, 0x01 };
     mc_rx_feed(&rx, junk, 3);
