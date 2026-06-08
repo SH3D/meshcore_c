@@ -21,6 +21,21 @@ static size_t make_inbound(uint8_t *out, const uint8_t *payload, size_t plen) {
     return plen + 3;
 }
 
+/* little-endian writers for building test payloads */
+static void le16(uint8_t *p, uint16_t v) { p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); }
+static void le32(uint8_t *p, uint32_t v) {
+    p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); p[2] = (uint8_t)(v >> 16); p[3] = (uint8_t)(v >> 24);
+}
+
+/* Parse a freshly-built payload through the rx assembler; returns mc_parse result. */
+static int feed_parse(mc_rx_t *rx, uint8_t *frame, uint8_t *scratch, size_t scap,
+                      const uint8_t *payload, size_t plen, mc_event_t *ev) {
+    size_t flen = make_inbound(frame, payload, plen), olen = 0;
+    mc_rx_feed(rx, frame, flen);
+    if (!mc_rx_poll(rx, scratch, scap, &olen)) return 0;
+    return mc_parse(scratch, olen, ev);
+}
+
 int main(void) {
     uint8_t scratch[512], frame[512], payload[300];
     size_t plen, flen, olen;
@@ -109,6 +124,173 @@ int main(void) {
     CHECK(ev.u.channel_data.path_len == 3 && ev.u.channel_data.data_type == 0xFFFF &&
           ev.u.channel_data.data_len == 4 && ev.u.channel_data.data[0] == 0xDE &&
           ev.u.channel_data.data[3] == 0xEF, "channel_data payload");
+
+    printf("== parse: MSG_SENT ==\n");
+    {
+        size_t j = 0;
+        payload[j++] = MC_RESP_SENT;
+        payload[j++] = 1;                          /* type */
+        le32(payload + j, 0x11223344); j += 4;     /* expected_ack */
+        le32(payload + j, 5000);       j += 4;     /* suggested_timeout */
+        CHECK(feed_parse(&rx, frame, scratch, sizeof scratch, payload, j, &ev) == 1 &&
+              ev.code == MC_RESP_SENT, "parse msg_sent");
+        CHECK(ev.u.msg_sent.type == 1 && ev.u.msg_sent.expected_ack == 0x11223344u &&
+              ev.u.msg_sent.suggested_timeout == 5000u, "msg_sent fields");
+    }
+
+    printf("== parse: STATS (core/radio/packets) ==\n");
+    {
+        size_t j = 0;
+        payload[j++] = MC_RESP_STATS; payload[j++] = MC_STATS_CORE;
+        le16(payload + j, 4200); j += 2;           /* battery_mv */
+        le32(payload + j, 86400); j += 4;          /* uptime_secs */
+        le16(payload + j, 3); j += 2;              /* errors */
+        payload[j++] = 7;                          /* queue_len */
+        CHECK(feed_parse(&rx, frame, scratch, sizeof scratch, payload, j, &ev) == 1 &&
+              ev.u.stats.subtype == MC_STATS_CORE && ev.u.stats.u.core.battery_mv == 4200 &&
+              ev.u.stats.u.core.uptime_secs == 86400 && ev.u.stats.u.core.errors == 3 &&
+              ev.u.stats.u.core.queue_len == 7, "stats core");
+
+        j = 0;
+        payload[j++] = MC_RESP_STATS; payload[j++] = MC_STATS_RADIO;
+        le16(payload + j, (uint16_t)(int16_t)-120); j += 2;  /* noise_floor i16 */
+        payload[j++] = (uint8_t)(int8_t)-90;                 /* last_rssi i8 */
+        payload[j++] = 40;                                   /* last_snr_q4 */
+        le32(payload + j, 1000); j += 4;                     /* tx_air_secs */
+        le32(payload + j, 2000); j += 4;                     /* rx_air_secs */
+        CHECK(feed_parse(&rx, frame, scratch, sizeof scratch, payload, j, &ev) == 1 &&
+              ev.u.stats.subtype == MC_STATS_RADIO && ev.u.stats.u.radio.noise_floor == -120 &&
+              ev.u.stats.u.radio.last_rssi == -90 && ev.u.stats.u.radio.last_snr_q4 == 40 &&
+              ev.u.stats.u.radio.tx_air_secs == 1000 && ev.u.stats.u.radio.rx_air_secs == 2000,
+              "stats radio (signed fields)");
+
+        j = 0;
+        payload[j++] = MC_RESP_STATS; payload[j++] = MC_STATS_PACKETS;
+        le32(payload + j, 10); j += 4; le32(payload + j, 20); j += 4;
+        le32(payload + j, 1);  j += 4; le32(payload + j, 2);  j += 4;
+        le32(payload + j, 3);  j += 4; le32(payload + j, 4);  j += 4;
+        le32(payload + j, 5);  j += 4;                        /* recv_errors */
+        CHECK(feed_parse(&rx, frame, scratch, sizeof scratch, payload, j, &ev) == 1 &&
+              ev.u.stats.u.packets.recv == 10 && ev.u.stats.u.packets.direct_rx == 4 &&
+              ev.u.stats.has_recv_errors && ev.u.stats.u.packets.recv_errors == 5,
+              "stats packets (+recv_errors)");
+    }
+
+    printf("== parse: SELF_INFO extended fields ==\n");
+    {
+        size_t j = 0;
+        payload[j++] = MC_RESP_SELF_INFO;
+        payload[j++] = 1; payload[j++] = 22; payload[j++] = 30;   /* type, txp, maxtxp */
+        for (int i = 0; i < 32; i++) payload[j++] = (uint8_t)i;   /* public_key */
+        le32(payload + j, (uint32_t)(int32_t)-37000000); j += 4;  /* adv_lat */
+        le32(payload + j, (uint32_t)(int32_t)145000000); j += 4;  /* adv_lon */
+        payload[j++] = 1;            /* multi_acks */
+        payload[j++] = 2;            /* adv_loc_policy */
+        payload[j++] = 0x36;         /* telemetry_mode: base=2 loc=1 env=3 */
+        payload[j++] = 1;            /* manual_add_contacts */
+        le32(payload + j, 915000); j += 4;   /* radio_freq */
+        le32(payload + j, 250000); j += 4;   /* radio_bw */
+        payload[j++] = 11;           /* radio_sf */
+        payload[j++] = 5;            /* radio_cr */
+        memcpy(payload + j, "node", 4); j += 4;
+        CHECK(feed_parse(&rx, frame, scratch, sizeof scratch, payload, j, &ev) == 1 &&
+              ev.code == MC_RESP_SELF_INFO, "parse self_info");
+        CHECK(ev.u.self_info.multi_acks == 1 && ev.u.self_info.adv_loc_policy == 2 &&
+              ev.u.self_info.telemetry_mode == 0x36 && ev.u.self_info.tm_base == 2 &&
+              ev.u.self_info.tm_loc == 1 && ev.u.self_info.tm_env == 3,
+              "self_info multi_acks/loc_policy/telemetry split");
+        CHECK(ev.u.self_info.adv_lat == -37000000 && ev.u.self_info.adv_lon == 145000000 &&
+              ev.u.self_info.manual_add_contacts == 1 && ev.u.self_info.radio_freq == 915000 &&
+              ev.u.self_info.radio_bw == 250000 && ev.u.self_info.radio_sf == 11 &&
+              ev.u.self_info.radio_cr == 5 && strcmp(ev.u.self_info.name, "node") == 0,
+              "self_info numeric + name");
+    }
+
+    printf("== parse: CHANNEL_MSG_RECV_V3 (SNR) + base sentinel ==\n");
+    {
+        size_t j = 0;
+        payload[j++] = MC_RESP_CHANNEL_MSG_RECV_V3;
+        payload[j++] = 40;                       /* SNR q4 */
+        payload[j++] = 0; payload[j++] = 0;      /* reserved */
+        payload[j++] = 2;                        /* channel_idx */
+        payload[j++] = MC_PATH_DIRECT;           /* path_len */
+        payload[j++] = MC_TXT_PLAIN;             /* txt_type */
+        le32(payload + j, 1700000000u); j += 4;  /* sender_ts */
+        memcpy(payload + j, "Alice: hi", 9); j += 9;
+        CHECK(feed_parse(&rx, frame, scratch, sizeof scratch, payload, j, &ev) == 1 &&
+              ev.code == MC_RESP_CHANNEL_MSG_RECV_V3 && ev.u.channel_msg.snr_q4 == 40 &&
+              ev.u.channel_msg.channel_idx == 2 && ev.u.channel_msg.path_len == MC_PATH_DIRECT &&
+              ev.u.channel_msg.sender_ts == 1700000000u &&
+              strcmp(ev.u.channel_msg.text, "Alice: hi") == 0, "channel_msg_v3 fields + SNR");
+
+        j = 0;
+        payload[j++] = MC_RESP_CHANNEL_MSG_RECV;
+        payload[j++] = 0;             /* channel_idx */
+        payload[j++] = 0;             /* path_len */
+        payload[j++] = MC_TXT_PLAIN;  /* txt_type */
+        le32(payload + j, 1); j += 4; memcpy(payload + j, "B: yo", 5); j += 5;
+        CHECK(feed_parse(&rx, frame, scratch, sizeof scratch, payload, j, &ev) == 1 &&
+              ev.u.channel_msg.snr_q4 == MC_SNR_NONE && strcmp(ev.u.channel_msg.text, "B: yo") == 0,
+              "channel_msg base has MC_SNR_NONE");
+    }
+
+    printf("== parse: CONTACT_MSG_RECV_V3 + signature skip ==\n");
+    {
+        size_t j = 0;
+        payload[j++] = MC_RESP_CONTACT_MSG_RECV_V3;
+        payload[j++] = (uint8_t)(int8_t)-8;      /* SNR q4 */
+        payload[j++] = 0; payload[j++] = 0;      /* reserved */
+        for (int i = 0; i < 6; i++) payload[j++] = (uint8_t)(0xC0 + i);  /* pubkey_prefix */
+        payload[j++] = 1;                        /* path_len */
+        payload[j++] = MC_TXT_SIGNED_PLAIN;      /* txt_type=2 */
+        le32(payload + j, 1700000001u); j += 4;  /* sender_ts */
+        payload[j++]=0xAA; payload[j++]=0xBB; payload[j++]=0xCC; payload[j++]=0xDD; /* signature */
+        memcpy(payload + j, "signed!", 7); j += 7;
+        CHECK(feed_parse(&rx, frame, scratch, sizeof scratch, payload, j, &ev) == 1 &&
+              ev.code == MC_RESP_CONTACT_MSG_RECV_V3 && ev.u.contact_msg.snr_q4 == -8 &&
+              ev.u.contact_msg.txt_type == MC_TXT_SIGNED_PLAIN && ev.u.contact_msg.has_signature &&
+              ev.u.contact_msg.signature[0] == 0xAA && ev.u.contact_msg.signature[3] == 0xDD &&
+              ev.u.contact_msg.pubkey_prefix[0] == 0xC0 &&
+              strcmp(ev.u.contact_msg.text, "signed!") == 0,
+              "contact_msg_v3 signed: SNR/sig/text");
+    }
+
+    printf("== parse: DEVICE_INFO with ver/repeat/path_hash (fw=10) ==\n");
+    {
+        size_t j = 0;
+        payload[j++] = MC_RESP_DEVICE_INFO;
+        payload[j++] = 10;                       /* fw_ver */
+        payload[j++] = 50;                       /* max_contacts/2 */
+        payload[j++] = 8;                        /* max_channels */
+        le32(payload + j, 123456); j += 4;       /* ble_pin */
+        memset(payload + j, 0, 12); memcpy(payload + j, "1 Jan 2026", 10); j += 12;
+        memset(payload + j, 0, 40); memcpy(payload + j, "Heltec V3", 9);  j += 40;
+        memset(payload + j, 0, 20); memcpy(payload + j, "v1.7.0", 6);     j += 20;
+        payload[j++] = 1;                        /* repeat (fw>=9) */
+        payload[j++] = 2;                        /* path_hash_mode (fw>=10) */
+        CHECK(feed_parse(&rx, frame, scratch, sizeof scratch, payload, j, &ev) == 1 &&
+              ev.u.device_info.fw_ver == 10 && ev.u.device_info.max_contacts == 100 &&
+              strcmp(ev.u.device_info.model, "Heltec V3") == 0 &&
+              strcmp(ev.u.device_info.ver, "v1.7.0") == 0 &&
+              ev.u.device_info.have_repeat && ev.u.device_info.repeat == 1 &&
+              ev.u.device_info.have_path_hash && ev.u.device_info.path_hash_mode == 2,
+              "device_info ver/repeat/path_hash");
+    }
+
+    printf("== build: send_txt_msg / send_cmd ==\n");
+    {
+        uint8_t dst[6] = { 1, 2, 3, 4, 5, 6 };
+        plen = mc_cmd_send_txt_msg(scratch, sizeof scratch, MC_TXT_PLAIN, 0, 1700000000u, dst, 6, "hi");
+        CHECK(plen == 1 + 1 + 1 + 4 + 6 + 2 && scratch[0] == MC_CMD_SEND_TXT_MSG &&
+              scratch[1] == MC_TXT_PLAIN && scratch[2] == 0, "send_txt_msg header");
+        CHECK(scratch[3] == 0x00 && scratch[4] == 0xF1 && scratch[5] == 0x53 && scratch[6] == 0x65 &&
+              scratch[7] == 1 && scratch[12] == 6 && scratch[13] == 'h' && scratch[14] == 'i',
+              "send_txt_msg ts LE + dst + body");
+        plen = mc_cmd_send_cmd(scratch, sizeof scratch, 1700000000u, dst, 6, "reboot");
+        CHECK(plen == 1 + 1 + 1 + 4 + 6 + 6 && scratch[0] == MC_CMD_SEND_TXT_MSG &&
+              scratch[1] == MC_TXT_CLI_DATA && scratch[2] == 0 && scratch[13] == 'r',
+              "send_cmd uses CLI txt_type");
+    }
 
     printf("== resync: garbage before a valid frame ==\n");
     uint8_t junk[3] = { 0x00, 0x99, 0x01 };

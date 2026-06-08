@@ -102,6 +102,20 @@ void MeshCoreCompanion::sendChannelText(uint8_t idx, const char *text, uint32_t 
     sendPayload(p, n);
 }
 
+void MeshCoreCompanion::sendTextMessage(const uint8_t *dst, size_t dstLen, const char *text, uint32_t senderTs) {
+    if (senderTs == 0) senderTs = deviceEpochNow();
+    uint8_t p[1 + 1 + 1 + 4 + 32 + MC_MAX_TEXT];
+    size_t n = mc_cmd_send_txt_msg(p, sizeof(p), MC_TXT_PLAIN, 0, senderTs, dst, dstLen, text);
+    sendPayload(p, n);
+}
+
+void MeshCoreCompanion::sendCommand(const uint8_t *dst, size_t dstLen, const char *cmd, uint32_t senderTs) {
+    if (senderTs == 0) senderTs = deviceEpochNow();
+    uint8_t p[1 + 1 + 1 + 4 + 32 + MC_MAX_TEXT];
+    size_t n = mc_cmd_send_cmd(p, sizeof(p), senderTs, dst, dstLen, cmd);
+    sendPayload(p, n);
+}
+
 void MeshCoreCompanion::syncNextMessage() {
     uint8_t p[1]; sendPayload(p, mc_cmd_sync_next_message(p, sizeof(p)));
 }
@@ -131,10 +145,17 @@ void MeshCoreCompanion::dispatch(const mc_event_t &ev) {
     case MC_RESP_CHANNEL_INFO:
         if (_onChanInfo) _onChanInfo(ev.u.channel_info);
         break;
+    case MC_RESP_SENT:
+        if (_onMsgSent) _onMsgSent(ev.u.msg_sent);
+        break;
+    case MC_RESP_STATS:
+        if (_onStats) _onStats(ev.u.stats);
+        break;
     case MC_PUSH_MSG_WAITING:
         if (_autoSync && !_draining) { _draining = true; syncNextMessage(); }
         break;
     case MC_RESP_CHANNEL_MSG_RECV:
+    case MC_RESP_CHANNEL_MSG_RECV_V3:
         if (_onText) _onText(ev.u.channel_msg);
         if (_draining) syncNextMessage();
         break;
@@ -143,6 +164,7 @@ void MeshCoreCompanion::dispatch(const mc_event_t &ev) {
         if (_draining) syncNextMessage();
         break;
     case MC_RESP_CONTACT_MSG_RECV:
+    case MC_RESP_CONTACT_MSG_RECV_V3:
         if (_onContact) _onContact(ev.u.contact_msg);
         if (_draining) syncNextMessage();
         break;

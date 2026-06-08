@@ -75,6 +75,44 @@ void loop() {
 }
 ```
 
+## Linux / host build (CMake)
+
+The portable C core needs no Arduino and no hardware — it builds and runs on any
+desktop. A `CMakeLists.txt` at the repo root builds the core, the host unit test,
+and the Linux examples (the Arduino C++ wrapper is skipped here — it needs
+`<Arduino.h>`):
+
+```sh
+cmake -B build && cmake --build build
+ctest --test-dir build --output-on-failure      # run the codec unit test
+```
+
+### Linux examples (`examples-linux/`)
+
+Both talk to a companion radio over **any tty** — a USB-CDC device
+(`/dev/ttyACM0`), a USB-serial adapter (`/dev/ttyUSB0`), or a raw UART
+(`/dev/serial0`):
+
+- **`tty_bridge`** — live: receive/echo channel traffic and send messages.
+  ```sh
+  ./build/meshcore_tty /dev/ttyACM0
+  ```
+- **`info`** — one-shot: dump everything the radio reports (model, firmware,
+  radio params, device time, channels + PSKs, stats), then exit.
+  ```sh
+  ./build/meshcore_info /dev/ttyACM0
+  ```
+
+No CMake? Compile a single example directly:
+
+```sh
+cc -std=c99 -Wall -Wextra -Isrc \
+   examples-linux/info/meshcore_info.c src/meshcore_companion.c -o meshcore_info
+```
+
+The same C core also ships starter examples for other toolchains in
+`examples-esp-idf/` (ESP-IDF UART driver) and `examples-stm32/` (STM32 HAL).
+
 ## What's covered
 
 | Need | API |
@@ -94,13 +132,24 @@ new command is one builder plus one `case`.
 
 ## Testing the core (no hardware)
 
+Run everything at once with `./testall.sh` — it runs the CMake/ctest, PlatformIO
+native, and Arduino-compile suites, and auto-skips whichever tools aren't
+installed (so it works on a cmake-only or PlatformIO-only box):
+
 ```sh
-cd test
-cc -std=c99 -Wall -Wextra -I../src test_codec.c ../src/meshcore_companion.c -o t && ./t
+./testall.sh
 ```
 
-Exercises command encoding, frame reassembly across split reads, every parser,
-and resync past line garbage.
+Or run a suite individually:
+
+```sh
+ctest --test-dir build --output-on-failure       # via CMake (see above)
+pio test -e native                               # via PlatformIO's native env
+cd test && cc -std=c99 -Wall -Wextra -I../src test_codec.c ../src/meshcore_companion.c -o t && ./t
+```
+
+The unit test exercises command encoding, frame reassembly across split reads,
+every parser, and resync past line garbage.
 
 ## Notes
 

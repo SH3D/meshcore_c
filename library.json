@@ -1,6 +1,6 @@
 {
   "name": "MeshCoreCompanion",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Client library for the MeshCore Companion Radio serial protocol. Portable C99 core (no I/O, no malloc, host-testable) with a thin Arduino C++ wrapper that connects a host MCU to a separate MeshCore companion radio over UART/USB serial. Receive and send on channels, set channel PSKs, read SNR/path metadata.",
   "keywords": ["meshcore", "lora", "companion", "serial", "mesh", "sx1262", "esp32", "nrf52"],
   "authors": [

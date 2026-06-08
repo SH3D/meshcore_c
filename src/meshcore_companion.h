@@ -86,10 +86,15 @@ enum {
     MC_RESP_DEVICE_INFO      = 13,
     MC_RESP_PRIVATE_KEY      = 14,
     MC_RESP_DISABLED         = 15,
+    MC_RESP_CONTACT_MSG_RECV_V3 = 16,  /* SNR-prefixed variant of code 7 */
+    MC_RESP_CHANNEL_MSG_RECV_V3 = 17,  /* SNR-prefixed variant of code 8 */
     MC_RESP_CHANNEL_INFO     = 18,
     MC_RESP_STATS            = 24,
     MC_RESP_CHANNEL_DATA_RECV= 27
 };
+
+/* ---- GET_STATS subtypes (stats_type arg / first STATS payload byte) ---- */
+enum { MC_STATS_CORE = 0, MC_STATS_RADIO = 1, MC_STATS_PACKETS = 2 };
 
 /* ---- Push codes (unsolicited, radio -> app) ---- */
 enum {
@@ -116,6 +121,8 @@ enum { MC_ADVERT_ZERO_HOP = 0, MC_ADVERT_FLOOD = 1 };
 #define MC_PATH_DIRECT 0xFF   /* path_len value meaning "received direct"     */
 /* SNR is transmitted as a signed int8 scaled x4. Recover dB with this. */
 #define MC_SNR_DB(q4)  ((float)(q4) / 4.0f)
+/* snr_q4 sentinel for non-V3 messages that carry no SNR. */
+#define MC_SNR_NONE    ((int8_t)-128)
 
 /* ======================================================================== *
  *  Receive side: streaming frame assembler
@@ -162,6 +169,16 @@ size_t mc_cmd_set_channel      (uint8_t *out, size_t cap, uint8_t channel_idx,
 size_t mc_cmd_send_channel_text(uint8_t *out, size_t cap, uint8_t txt_type,
                                 uint8_t channel_idx, uint32_t sender_ts,
                                 const char *text);
+/* Direct (contact) text/command message (cmd 2). `dst` is the destination's
+ * public key or 6-byte prefix (dst_len bytes, usually 6). */
+size_t mc_cmd_send_txt_msg     (uint8_t *out, size_t cap, uint8_t txt_type,
+                                uint8_t attempt, uint32_t sender_ts,
+                                const uint8_t *dst, size_t dst_len,
+                                const char *text);
+/* CLI command to a repeater/companion: cmd 2, txt_type=MC_TXT_CLI_DATA, attempt 0. */
+size_t mc_cmd_send_cmd         (uint8_t *out, size_t cap, uint32_t sender_ts,
+                                const uint8_t *dst, size_t dst_len,
+                                const char *cmd);
 size_t mc_cmd_set_radio_params (uint8_t *out, size_t cap, uint32_t freq_hz_x1000,
                                 uint32_t bw, uint8_t sf, uint8_t cr);
 size_t mc_cmd_get_stats        (uint8_t *out, size_t cap, uint8_t stats_type);
@@ -176,6 +193,11 @@ typedef struct {
     uint32_t ble_pin;
     char     build_date[16];
     char     model[MC_MAX_MODEL];
+    char     ver[24];           /* firmware version string (fw_ver>=3)        */
+    uint8_t  repeat;            /* repeater mode (fw_ver>=9); see have_repeat */
+    uint8_t  path_hash_mode;    /* fw_ver>=10; see have_path_hash             */
+    int      have_repeat;
+    int      have_path_hash;
 } mc_device_info_t;
 
 typedef struct {
@@ -183,6 +205,7 @@ typedef struct {
     uint8_t  path_len;          /* MC_PATH_DIRECT or flood hop count */
     uint8_t  txt_type;
     uint32_t sender_ts;
+    int8_t   snr_q4;            /* V3 only (code 17); MC_SNR_NONE otherwise */
     char     text[MC_MAX_TEXT]; /* for channel msgs this is "Name: body" */
 } mc_channel_msg_t;
 
@@ -200,6 +223,9 @@ typedef struct {
     uint8_t  path_len;
     uint8_t  txt_type;
     uint32_t sender_ts;
+    int8_t   snr_q4;            /* V3 only (code 16); MC_SNR_NONE otherwise   */
+    uint8_t  signature[4];      /* present when txt_type==MC_TXT_SIGNED_PLAIN */
+    int      has_signature;
     char     text[MC_MAX_TEXT];
 } mc_contact_msg_t;
 
@@ -213,12 +239,33 @@ typedef struct {
 typedef struct {
     uint8_t  type, tx_power, max_tx_power;
     uint8_t  public_key[32];
-    int32_t  adv_lat, adv_lon;
+    int32_t  adv_lat, adv_lon;          /* degrees x 1e6 */
+    uint8_t  multi_acks;
+    uint8_t  adv_loc_policy;
+    uint8_t  telemetry_mode;            /* raw byte; decoded below            */
+    uint8_t  tm_base, tm_loc, tm_env;   /* 2-bit fields: base=t&3, loc=(t>>2)&3, env=(t>>4)&3 */
     uint8_t  manual_add_contacts;
     uint32_t radio_freq, radio_bw;
     uint8_t  radio_sf, radio_cr;
     char     name[MC_MAX_TEXT];
 } mc_self_info_t;
+
+typedef struct {
+    uint8_t  type;              /* result/type byte                          */
+    uint32_t expected_ack;      /* 4-byte ack tag (LE) to match an ACK push  */
+    uint32_t suggested_timeout; /* ms to wait for the ACK                     */
+} mc_msg_sent_t;
+
+typedef struct {
+    uint8_t subtype;            /* MC_STATS_CORE / RADIO / PACKETS           */
+    int     has_recv_errors;    /* PACKETS only: recv_errors field present   */
+    union {
+        struct { uint16_t battery_mv; uint32_t uptime_secs; uint16_t errors; uint8_t queue_len; } core;
+        struct { int16_t noise_floor; int8_t last_rssi; int8_t last_snr_q4;
+                 uint32_t tx_air_secs, rx_air_secs; } radio;
+        struct { uint32_t recv, sent, flood_tx, direct_tx, flood_rx, direct_rx, recv_errors; } packets;
+    } u;
+} mc_stats_t;
 
 typedef struct {
     uint8_t code;               /* response or push code (first payload byte) */
@@ -229,6 +276,8 @@ typedef struct {
         mc_contact_msg_t  contact_msg;
         mc_channel_info_t channel_info;
         mc_self_info_t    self_info;
+        mc_msg_sent_t     msg_sent;         /* MC_RESP_SENT                  */
+        mc_stats_t        stats;            /* MC_RESP_STATS                 */
         uint32_t          curr_time;        /* epoch secs                    */
         uint16_t          battery_mv;
         int8_t            err_code;          /* MC_RESP_ERR (-1 if absent)    */

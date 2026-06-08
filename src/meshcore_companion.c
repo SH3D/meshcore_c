@@ -34,6 +34,45 @@ static void copy_rest_string(char *dst, size_t dst_cap, const uint8_t *src, size
     dst[i] = 0;
 }
 
+/* Channel text message body parser, shared by the base (code 8) and V3 (code
+ * 17) forms. V3 prefixes the body with [snr:i8][2 reserved]; base has no SNR. */
+static int parse_channel_text(const uint8_t *b, size_t n, int v3, mc_channel_msg_t *m) {
+    size_t lead = v3 ? 3u : 0u;
+    if (n < lead + 7) return 0;
+    const uint8_t *q = b + lead;
+    size_t qn = n - lead;
+    m->channel_idx = (int8_t)q[0];
+    m->path_len    = q[1];
+    m->txt_type    = q[2];
+    m->sender_ts   = get_u32(q + 3);
+    m->snr_q4      = v3 ? (int8_t)b[0] : MC_SNR_NONE;
+    copy_rest_string(m->text, sizeof(m->text), q, 7, qn);
+    return 1;
+}
+
+/* Contact text message body parser, shared by the base (code 7) and V3 (code
+ * 16) forms. A signature (4 bytes) precedes the text when txt_type is
+ * MC_TXT_SIGNED_PLAIN; the base form previously mis-read this as text. */
+static int parse_contact_text(const uint8_t *b, size_t n, int v3, mc_contact_msg_t *m) {
+    size_t lead = v3 ? 3u : 0u;
+    if (n < lead + 12) return 0;
+    const uint8_t *q = b + lead;
+    size_t qn = n - lead;
+    memcpy(m->pubkey_prefix, q, 6);
+    m->path_len  = q[6];
+    m->txt_type  = q[7];
+    m->sender_ts = get_u32(q + 8);
+    m->snr_q4    = v3 ? (int8_t)b[0] : MC_SNR_NONE;
+    size_t toff = 12;
+    if (m->txt_type == MC_TXT_SIGNED_PLAIN && qn >= toff + 4) {
+        memcpy(m->signature, q + toff, 4);
+        m->has_signature = 1;
+        toff += 4;
+    }
+    copy_rest_string(m->text, sizeof(m->text), q, toff, qn);
+    return 1;
+}
+
 /* ======================================================================== */
 void mc_rx_init(mc_rx_t *rx) { rx->len = 0; }
 
@@ -163,6 +202,27 @@ size_t mc_cmd_send_channel_text(uint8_t *out, size_t cap, uint8_t txt_type,
     return i;
 }
 
+size_t mc_cmd_send_txt_msg(uint8_t *out, size_t cap, uint8_t txt_type,
+                           uint8_t attempt, uint32_t sender_ts,
+                           const uint8_t *dst, size_t dst_len, const char *text) {
+    size_t tlen = text ? strlen(text) : 0;
+    size_t total = 1 + 1 + 1 + 4 + dst_len + tlen;
+    if (cap < total) return 0;
+    size_t i = 0;
+    out[i++] = MC_CMD_SEND_TXT_MSG;
+    out[i++] = txt_type;
+    out[i++] = attempt;
+    put_u32(out + i, sender_ts); i += 4;
+    if (dst_len) { memcpy(out + i, dst, dst_len); i += dst_len; }
+    memcpy(out + i, text, tlen); i += tlen;
+    return i;
+}
+
+size_t mc_cmd_send_cmd(uint8_t *out, size_t cap, uint32_t sender_ts,
+                       const uint8_t *dst, size_t dst_len, const char *cmd) {
+    return mc_cmd_send_txt_msg(out, cap, MC_TXT_CLI_DATA, 0, sender_ts, dst, dst_len, cmd);
+}
+
 size_t mc_cmd_set_radio_params(uint8_t *out, size_t cap, uint32_t freq_hz_x1000,
                                uint32_t bw, uint8_t sf, uint8_t cr) {
     if (cap < 11) return 0;
@@ -208,9 +268,54 @@ int mc_parse(const uint8_t *p, size_t len, mc_event_t *ev) {
         ev->u.battery_mv = get_u16(b);
         return 1;
 
+    case MC_RESP_SENT:
+        if (n < 9) return 0;
+        ev->u.msg_sent.type              = b[0];
+        ev->u.msg_sent.expected_ack      = get_u32(b + 1);
+        ev->u.msg_sent.suggested_timeout = get_u32(b + 5);
+        return 1;
+
+    case MC_RESP_STATS: {
+        if (n < 1) return 0;
+        mc_stats_t *st = &ev->u.stats;
+        st->subtype = b[0];
+        const uint8_t *q = b + 1;   /* stat fields start at payload offset 2 */
+        size_t qn = n - 1;
+        switch (st->subtype) {
+        case MC_STATS_CORE:                       /* <H I H B> */
+            if (qn < 9) return 0;
+            st->u.core.battery_mv  = get_u16(q);
+            st->u.core.uptime_secs = get_u32(q + 2);
+            st->u.core.errors      = get_u16(q + 6);
+            st->u.core.queue_len   = q[8];
+            return 1;
+        case MC_STATS_RADIO:                      /* <h b b I I> */
+            if (qn < 12) return 0;
+            st->u.radio.noise_floor = (int16_t)get_u16(q);
+            st->u.radio.last_rssi   = (int8_t)q[2];
+            st->u.radio.last_snr_q4 = (int8_t)q[3];
+            st->u.radio.tx_air_secs = get_u32(q + 4);
+            st->u.radio.rx_air_secs = get_u32(q + 8);
+            return 1;
+        case MC_STATS_PACKETS:                    /* <I I I I I I> + opt I */
+            if (qn < 24) return 0;
+            st->u.packets.recv      = get_u32(q +  0);
+            st->u.packets.sent      = get_u32(q +  4);
+            st->u.packets.flood_tx  = get_u32(q +  8);
+            st->u.packets.direct_tx = get_u32(q + 12);
+            st->u.packets.flood_rx  = get_u32(q + 16);
+            st->u.packets.direct_rx = get_u32(q + 20);
+            if (qn >= 28) { st->u.packets.recv_errors = get_u32(q + 24); st->has_recv_errors = 1; }
+            return 1;
+        default:
+            return 1;   /* unknown subtype: subtype recorded, no fields */
+        }
+    }
+
     case MC_RESP_DEVICE_INFO: {
         /* [fw_ver:i8][max_contacts/2:u8][max_channels:u8][ble_pin:u32]
-           [build_date:cstr12][model:rest] */
+           [build_date:cstr12][model:cstr40][ver:cstr20]
+           [repeat:u8 (fw>=9)][path_hash_mode:u8 (fw>=10)] */
         if (n < 1) return 0;
         mc_device_info_t *d = &ev->u.device_info;
         d->fw_ver = (int8_t)b[0];
@@ -221,31 +326,26 @@ int mc_parse(const uint8_t *p, size_t len, mc_event_t *ev) {
             d->ble_pin = get_u32(b + off); off += 4;
         }
         if (n >= off + 12) { copy_cstring(d->build_date, sizeof(d->build_date), b + off, 12); off += 12; }
-        copy_rest_string(d->model, sizeof(d->model), b, off, n);
+        /* model is a 40-byte field on fw>=3; tolerate short (older) frames. */
+        {
+            size_t mlen = (n >= off + 40) ? 40 : (n > off ? n - off : 0);
+            copy_cstring(d->model, sizeof(d->model), b + off, mlen); off += mlen;
+        }
+        if (n >= off + 20) { copy_cstring(d->ver, sizeof(d->ver), b + off, 20); off += 20; }
+        if (d->fw_ver >= 9  && n > off) { d->repeat = b[off++];         d->have_repeat = 1; }
+        if (d->fw_ver >= 10 && n > off) { d->path_hash_mode = b[off++]; d->have_path_hash = 1; }
         return 1;
     }
 
-    case MC_RESP_CHANNEL_MSG_RECV: {
-        if (n < 7) return 0;
-        mc_channel_msg_t *m = &ev->u.channel_msg;
-        m->channel_idx = (int8_t)b[0];
-        m->path_len    = b[1];
-        m->txt_type    = b[2];
-        m->sender_ts   = get_u32(b + 3);
-        copy_rest_string(m->text, sizeof(m->text), b, 7, n);
-        return 1;
-    }
+    case MC_RESP_CHANNEL_MSG_RECV:
+        return parse_channel_text(b, n, 0, &ev->u.channel_msg);
+    case MC_RESP_CHANNEL_MSG_RECV_V3:
+        return parse_channel_text(b, n, 1, &ev->u.channel_msg);
 
-    case MC_RESP_CONTACT_MSG_RECV: {
-        if (n < 12) return 0;
-        mc_contact_msg_t *m = &ev->u.contact_msg;
-        memcpy(m->pubkey_prefix, b, 6);
-        m->path_len  = b[6];
-        m->txt_type  = b[7];
-        m->sender_ts = get_u32(b + 8);
-        copy_rest_string(m->text, sizeof(m->text), b, 12, n);
-        return 1;
-    }
+    case MC_RESP_CONTACT_MSG_RECV:
+        return parse_contact_text(b, n, 0, &ev->u.contact_msg);
+    case MC_RESP_CONTACT_MSG_RECV_V3:
+        return parse_contact_text(b, n, 1, &ev->u.contact_msg);
 
     case MC_RESP_CHANNEL_DATA_RECV: {
         if (n < 8) return 0;
@@ -285,7 +385,12 @@ int mc_parse(const uint8_t *p, size_t len, mc_event_t *ev) {
         memcpy(s->public_key, b + 3, 32);
         s->adv_lat = (int32_t)get_u32(b + 35);
         s->adv_lon = (int32_t)get_u32(b + 39);
-        /* b[43..45] reserved */
+        s->multi_acks     = b[43];
+        s->adv_loc_policy = b[44];
+        s->telemetry_mode = b[45];
+        s->tm_base = (uint8_t)(b[45]        & 0x3);
+        s->tm_loc  = (uint8_t)((b[45] >> 2) & 0x3);
+        s->tm_env  = (uint8_t)((b[45] >> 4) & 0x3);
         s->manual_add_contacts = b[46];
         s->radio_freq = get_u32(b + 47);
         s->radio_bw   = get_u32(b + 51);

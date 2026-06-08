@@ -27,6 +27,8 @@ public:
     using DeviceInfoCb  = std::function<void(const mc_device_info_t&)>;
     using ChannelInfoCb = std::function<void(const mc_channel_info_t&)>;
     using SelfInfoCb     = std::function<void(const mc_self_info_t&)>;
+    using MsgSentCb      = std::function<void(const mc_msg_sent_t&)>;
+    using StatsCb        = std::function<void(const mc_stats_t&)>;
     using EventCb        = std::function<void(const mc_event_t&)>;
 
     explicit MeshCoreCompanion(Stream &io) : _io(io) {}
@@ -51,6 +53,10 @@ public:
     bool setChannelHexSecret(uint8_t idx, const char *name, const char *hex32);
     /* senderTs == 0 uses the tracked device time if known, else 0. */
     void sendChannelText(uint8_t idx, const char *text, uint32_t senderTs = 0);
+    /* Direct message / CLI command to a contact (dst = pubkey or 6-byte prefix).
+     * senderTs == 0 uses the tracked device time if known. */
+    void sendTextMessage(const uint8_t *dst, size_t dstLen, const char *text, uint32_t senderTs = 0);
+    void sendCommand(const uint8_t *dst, size_t dstLen, const char *cmd, uint32_t senderTs = 0);
     void syncNextMessage();
     void drainMessages();              /* start a manual sync-drain loop */
     void getStats(uint8_t statsType);
@@ -69,6 +75,8 @@ public:
     void onDeviceInfo(DeviceInfoCb cb)    { _onDevInfo = cb; }
     void onChannelInfo(ChannelInfoCb cb)  { _onChanInfo = cb; }
     void onSelfInfo(SelfInfoCb cb)        { _onSelfInfo = cb; }
+    void onMsgSent(MsgSentCb cb)          { _onMsgSent = cb; }
+    void onStats(StatsCb cb)              { _onStats = cb; }
     void onEvent(EventCb cb)              { _onEvent = cb; }   /* every parsed frame */
 
 private:
@@ -93,6 +101,8 @@ private:
     DeviceInfoCb  _onDevInfo;
     ChannelInfoCb _onChanInfo;
     SelfInfoCb    _onSelfInfo;
+    MsgSentCb     _onMsgSent;
+    StatsCb       _onStats;
     EventCb       _onEvent;
 };
 

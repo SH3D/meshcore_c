@@ -27,6 +27,10 @@ target_include_directories(meshcore_companion PUBLIC src)
 add_executable(meshcore_tty examples-linux/tty_bridge/meshcore_tty.c)
 target_link_libraries(meshcore_tty PRIVATE meshcore_companion)
 
+# Linux example: one-shot dump of everything the radio reports, then exit.
+add_executable(meshcore_info examples-linux/info/meshcore_info.c)
+target_link_libraries(meshcore_info PRIVATE meshcore_companion)
+
 # Host unit test for the codec (no hardware required).
 enable_testing()
 add_executable(test_codec test/test_codec.c)
