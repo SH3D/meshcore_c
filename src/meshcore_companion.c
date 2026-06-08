@@ -73,6 +73,24 @@ static int parse_contact_text(const uint8_t *b, size_t n, int v3, mc_contact_msg
     return 1;
 }
 
+/* Contact record, shared by CONTACT (3) and NEW_ADVERT (0x8A). */
+static int parse_contact(const uint8_t *b, size_t n, mc_contact_t *c) {
+    /* pubkey32 + type + flags + path_len + path64 + name32 + 3*u32 + u32 */
+    if (n < 32 + 1 + 1 + 1 + 64 + 32 + 4 + 4 + 4) return 0;
+    size_t o = 0;
+    memcpy(c->public_key, b + o, 32); o += 32;
+    c->type         = b[o++];
+    c->flags        = b[o++];
+    c->out_path_len = b[o++];
+    memcpy(c->out_path, b + o, 64); o += 64;
+    copy_cstring(c->adv_name, sizeof(c->adv_name), b + o, 32); o += 32;
+    c->last_advert = get_u32(b + o); o += 4;
+    c->adv_lat = (int32_t)get_u32(b + o); o += 4;
+    c->adv_lon = (int32_t)get_u32(b + o); o += 4;
+    c->lastmod = get_u32(b + o); o += 4;
+    return 1;
+}
+
 /* ======================================================================== */
 void mc_rx_init(mc_rx_t *rx) { rx->len = 0; }
 
@@ -237,6 +255,84 @@ size_t mc_cmd_set_radio_params(uint8_t *out, size_t cap, uint32_t freq_hz_x1000,
 size_t mc_cmd_get_stats(uint8_t *out, size_t cap, uint8_t stats_type) {
     if (cap < 2) return 0;
     out[0] = MC_CMD_GET_STATS; out[1] = stats_type; return 2;
+}
+
+/* ---- contacts ---- */
+size_t mc_cmd_get_contacts(uint8_t *out, size_t cap, uint32_t since_lastmod) {
+    if (since_lastmod > 0) {
+        if (cap < 5) return 0;
+        out[0] = MC_CMD_GET_CONTACTS; put_u32(out + 1, since_lastmod); return 5;
+    }
+    if (cap < 1) return 0;
+    out[0] = MC_CMD_GET_CONTACTS; return 1;
+}
+
+/* [code][pubkey:32] */
+static size_t cmd_key_only(uint8_t *out, size_t cap, uint8_t code, const uint8_t key[32]) {
+    if (cap < 33) return 0;
+    out[0] = code; memcpy(out + 1, key, 32); return 33;
+}
+size_t mc_cmd_remove_contact(uint8_t *out, size_t cap, const uint8_t pubkey[32]) {
+    return cmd_key_only(out, cap, MC_CMD_REMOVE_CONTACT, pubkey);
+}
+size_t mc_cmd_reset_path(uint8_t *out, size_t cap, const uint8_t pubkey[32]) {
+    return cmd_key_only(out, cap, MC_CMD_RESET_PATH, pubkey);
+}
+size_t mc_cmd_share_contact(uint8_t *out, size_t cap, const uint8_t pubkey[32]) {
+    return cmd_key_only(out, cap, MC_CMD_SHARE_CONTACT, pubkey);
+}
+size_t mc_cmd_get_contact_by_key(uint8_t *out, size_t cap, const uint8_t pubkey[32]) {
+    return cmd_key_only(out, cap, MC_CMD_GET_CONTACT_BY_KEY, pubkey);
+}
+size_t mc_cmd_export_contact(uint8_t *out, size_t cap, const uint8_t pubkey[32]) {
+    if (pubkey == NULL) { if (cap < 1) return 0; out[0] = MC_CMD_EXPORT_CONTACT; return 1; }
+    return cmd_key_only(out, cap, MC_CMD_EXPORT_CONTACT, pubkey);
+}
+size_t mc_cmd_import_contact(uint8_t *out, size_t cap, const uint8_t *card, size_t card_len) {
+    size_t total = 1 + card_len;
+    if (cap < total) return 0;
+    out[0] = MC_CMD_IMPORT_CONTACT;
+    if (card_len) memcpy(out + 1, card, card_len);
+    return total;
+}
+size_t mc_cmd_add_update_contact(uint8_t *out, size_t cap, const mc_contact_t *c) {
+    size_t total = 1 + 32 + 1 + 1 + 1 + 64 + 32 + 4 + 4 + 4;   /* 144 */
+    if (cap < total) return 0;
+    size_t o = 0;
+    out[o++] = MC_CMD_ADD_UPDATE_CONTACT;
+    memcpy(out + o, c->public_key, 32); o += 32;
+    out[o++] = c->type;
+    out[o++] = c->flags;
+    out[o++] = c->out_path_len;
+    memcpy(out + o, c->out_path, 64); o += 64;
+    memset(out + o, 0, 32);
+    { size_t nl = strlen(c->adv_name); if (nl > 32) nl = 32; memcpy(out + o, c->adv_name, nl); }
+    o += 32;
+    put_u32(out + o, c->last_advert);        o += 4;
+    put_u32(out + o, (uint32_t)c->adv_lat);  o += 4;
+    put_u32(out + o, (uint32_t)c->adv_lon);  o += 4;
+    return o;
+}
+
+/* ---- binary / anonymous requests ---- */
+static size_t cmd_req(uint8_t *out, size_t cap, uint8_t code, const uint8_t dst[32],
+                      uint8_t req_type, const uint8_t *data, size_t data_len) {
+    size_t total = 1 + 32 + 1 + data_len;
+    if (cap < total) return 0;
+    size_t o = 0;
+    out[o++] = code;
+    memcpy(out + o, dst, 32); o += 32;
+    out[o++] = req_type;
+    if (data_len) { memcpy(out + o, data, data_len); o += data_len; }
+    return o;
+}
+size_t mc_cmd_send_binary_req(uint8_t *out, size_t cap, const uint8_t dst[32],
+                              uint8_t req_type, const uint8_t *data, size_t data_len) {
+    return cmd_req(out, cap, MC_CMD_SEND_BINARY_REQ, dst, req_type, data, data_len);
+}
+size_t mc_cmd_send_anon_req(uint8_t *out, size_t cap, const uint8_t dst[32],
+                            uint8_t req_type, const uint8_t *data, size_t data_len) {
+    return cmd_req(out, cap, MC_CMD_SEND_ANON_REQ, dst, req_type, data, data_len);
 }
 
 /* ======================================================================== */
@@ -412,7 +508,103 @@ int mc_parse(const uint8_t *p, size_t len, mc_event_t *ev) {
         ev->u.send_confirmed.round_trip = get_u32(b + 4);
         return 1;
 
+    case MC_RESP_CONTACTS_START:
+        if (n < 4) return 0;
+        ev->u.contacts_count = get_u32(b);
+        return 1;
+
+    case MC_RESP_CONTACT:
+    case MC_PUSH_NEW_ADVERT:
+        return parse_contact(b, n, &ev->u.contact);
+
+    case MC_RESP_END_OF_CONTACTS:
+        if (n < 4) return 0;
+        ev->u.contacts_lastmod = get_u32(b);
+        return 1;
+
+    case MC_RESP_CONTACT_URI: {
+        size_t dl = n;
+        if (dl > sizeof(ev->u.contact_uri.data)) dl = sizeof(ev->u.contact_uri.data);
+        memcpy(ev->u.contact_uri.data, b, dl);
+        ev->u.contact_uri.len = (uint8_t)dl;
+        return 1;
+    }
+
+    case MC_RESP_ADVERT_PATH: {
+        if (n < 5) return 0;
+        ev->u.advert_path.timestamp = get_u32(b);
+        ev->u.advert_path.path_len  = b[4];
+        size_t pl = n - 5;
+        if (pl > sizeof(ev->u.advert_path.path)) pl = sizeof(ev->u.advert_path.path);
+        memcpy(ev->u.advert_path.path, b + 5, pl);
+        return 1;
+    }
+
+    case MC_RESP_AUTOADD_CONFIG:
+        if (n < 1) return 0;
+        ev->u.autoadd_config = b[0];
+        return 1;
+
+    case MC_RESP_ALLOWED_REPEAT_FREQ: {
+        uint8_t cnt = 0;
+        size_t o = 0;
+        while (o + 8 <= n && cnt < 8) {
+            uint32_t lo = get_u32(b + o), hi = get_u32(b + o + 4);
+            if (lo == 0 && hi == 0) break;
+            ev->u.allowed_freq.pair[cnt].min = lo;
+            ev->u.allowed_freq.pair[cnt].max = hi;
+            cnt++; o += 8;
+        }
+        ev->u.allowed_freq.count = cnt;
+        return 1;
+    }
+
+    case MC_PUSH_BINARY_RESP: {
+        if (n < 5) return 0;          /* reserved(1) + tag(4) */
+        mc_binary_resp_t *r = &ev->u.binary_resp;
+        /* b[0] reserved */
+        r->tag = get_u32(b + 1);
+        size_t dl = n - 5;
+        if (dl > sizeof(r->data)) dl = sizeof(r->data);
+        memcpy(r->data, b + 5, dl);
+        r->data_len = (uint8_t)dl;
+        return 1;
+    }
+
+    case MC_PUSH_CONTACT_DELETED:
+        if (n < 32) return 0;
+        memcpy(ev->u.deleted_key, b, 32);
+        return 1;
+
+    case MC_PUSH_CONTACTS_FULL:
+        return 1;
+
     default:
         return 0;   /* recognised code byte set in ev->code, body not parsed */
     }
+}
+
+/* Decode a STATUS binary-response payload (see mc_status_t). */
+int mc_parse_status(const uint8_t *d, size_t len, mc_status_t *s) {
+    if (len < 52) return 0;
+    memset(s, 0, sizeof(*s));
+    s->bat_mv          = get_u16(d + 0);
+    s->tx_queue_len    = get_u16(d + 2);
+    s->noise_floor     = (int16_t)get_u16(d + 4);
+    s->last_rssi       = (int16_t)get_u16(d + 6);
+    s->nb_recv         = get_u32(d + 8);
+    s->nb_sent         = get_u32(d + 12);
+    s->airtime_secs    = get_u32(d + 16);
+    s->uptime_secs     = get_u32(d + 20);
+    s->sent_flood      = get_u32(d + 24);
+    s->sent_direct     = get_u32(d + 28);
+    s->recv_flood      = get_u32(d + 32);
+    s->recv_direct     = get_u32(d + 36);
+    s->full_evts       = get_u16(d + 40);
+    s->last_snr_q4     = (int16_t)get_u16(d + 42);
+    s->direct_dups     = get_u16(d + 44);
+    s->flood_dups      = get_u16(d + 46);
+    s->rx_airtime_secs = get_u32(d + 48);
+    if (len >= 56) { s->recv_errors = get_u32(d + 52); s->has_recv_errors = 1; }
+    return 1;
 }

@@ -292,6 +292,129 @@ int main(void) {
               "send_cmd uses CLI txt_type");
     }
 
+    printf("== build: contact commands ==\n");
+    {
+        uint8_t key[32]; for (int i = 0; i < 32; i++) key[i] = (uint8_t)(0x10 + i);
+        plen = mc_cmd_get_contacts(scratch, sizeof scratch, 0);
+        CHECK(plen == 1 && scratch[0] == MC_CMD_GET_CONTACTS, "get_contacts (all)");
+        plen = mc_cmd_get_contacts(scratch, sizeof scratch, 0x01020304);
+        CHECK(plen == 5 && scratch[1] == 0x04 && scratch[4] == 0x01, "get_contacts (since lastmod LE)");
+        plen = mc_cmd_remove_contact(scratch, sizeof scratch, key);
+        CHECK(plen == 33 && scratch[0] == MC_CMD_REMOVE_CONTACT && scratch[1] == 0x10 &&
+              scratch[32] == 0x2F, "remove_contact (code + 32-byte key)");
+        plen = mc_cmd_reset_path(scratch, sizeof scratch, key);
+        CHECK(plen == 33 && scratch[0] == MC_CMD_RESET_PATH, "reset_path");
+        plen = mc_cmd_get_contact_by_key(scratch, sizeof scratch, key);
+        CHECK(plen == 33 && scratch[0] == MC_CMD_GET_CONTACT_BY_KEY, "get_contact_by_key");
+        plen = mc_cmd_export_contact(scratch, sizeof scratch, NULL);
+        CHECK(plen == 1 && scratch[0] == MC_CMD_EXPORT_CONTACT, "export_contact (self)");
+        plen = mc_cmd_export_contact(scratch, sizeof scratch, key);
+        CHECK(plen == 33 && scratch[0] == MC_CMD_EXPORT_CONTACT, "export_contact (key)");
+
+        mc_contact_t c; memset(&c, 0, sizeof c);
+        memcpy(c.public_key, key, 32);
+        c.type = 1; c.flags = 0x80; c.out_path_len = 2;
+        c.out_path[0] = 0xAB; c.out_path[1] = 0xCD;
+        strcpy(c.adv_name, "RepeaterX");
+        c.last_advert = 1700000000u; c.adv_lat = -37000000; c.adv_lon = 145000000;
+        plen = mc_cmd_add_update_contact(scratch, sizeof scratch, &c);
+        CHECK(plen == 144 && scratch[0] == MC_CMD_ADD_UPDATE_CONTACT && scratch[1] == 0x10 &&
+              scratch[33] == 1 && scratch[34] == 0x80 && scratch[35] == 2 &&
+              scratch[36] == 0xAB, "add_update_contact header + path");
+        CHECK(memcmp(scratch + 100, "RepeaterX", 9) == 0 && scratch[109] == 0 &&
+              scratch[132] == 0x00 && scratch[133] == 0xF1,  /* last_advert 0x6553F100 LE */
+              "add_update_contact name(32) + last_advert");
+    }
+
+    printf("== build: binary / anon requests ==\n");
+    {
+        uint8_t dst[32]; for (int i = 0; i < 32; i++) dst[i] = (uint8_t)(0x40 + i);
+        plen = mc_cmd_send_binary_req(scratch, sizeof scratch, dst, MC_BINARY_REQ_STATUS, NULL, 0);
+        CHECK(plen == 34 && scratch[0] == MC_CMD_SEND_BINARY_REQ && scratch[1] == 0x40 &&
+              scratch[32] == 0x5F && scratch[33] == MC_BINARY_REQ_STATUS,
+              "send_binary_req STATUS (code+dst+type)");
+        uint8_t blob[3] = { 0xAA, 0xBB, 0xCC };
+        plen = mc_cmd_send_anon_req(scratch, sizeof scratch, dst, MC_ANON_REQ_BASIC, blob, 3);
+        CHECK(plen == 37 && scratch[0] == MC_CMD_SEND_ANON_REQ && scratch[33] == MC_ANON_REQ_BASIC &&
+              scratch[34] == 0xAA && scratch[36] == 0xCC, "send_anon_req BASIC + data");
+    }
+
+    printf("== parse: contact stream (START / CONTACT / END) ==\n");
+    {
+        size_t j = 0;
+        payload[j++] = MC_RESP_CONTACTS_START;
+        le32(payload + j, 2); j += 4;
+        CHECK(feed_parse(&rx, frame, scratch, sizeof scratch, payload, j, &ev) == 1 &&
+              ev.code == MC_RESP_CONTACTS_START && ev.u.contacts_count == 2, "contacts_start count");
+
+        j = 0;
+        payload[j++] = MC_RESP_CONTACT;
+        for (int i = 0; i < 32; i++) payload[j++] = (uint8_t)(0x10 + i);  /* pubkey */
+        payload[j++] = 1;                  /* type */
+        payload[j++] = 0x80;               /* flags */
+        payload[j++] = 2;                  /* out_path_len */
+        memset(payload + j, 0, 64); payload[j] = 0xAB; payload[j + 1] = 0xCD; j += 64;
+        memset(payload + j, 0, 32); memcpy(payload + j, "RepeaterX", 9); j += 32;
+        le32(payload + j, 1700000000u); j += 4;          /* last_advert */
+        le32(payload + j, (uint32_t)-37000000); j += 4;  /* adv_lat */
+        le32(payload + j, (uint32_t)145000000); j += 4;  /* adv_lon */
+        le32(payload + j, 4242u); j += 4;                /* lastmod */
+        CHECK(feed_parse(&rx, frame, scratch, sizeof scratch, payload, j, &ev) == 1 &&
+              ev.code == MC_RESP_CONTACT && ev.u.contact.public_key[0] == 0x10 &&
+              ev.u.contact.type == 1 && ev.u.contact.flags == 0x80 &&
+              ev.u.contact.out_path_len == 2 && ev.u.contact.out_path[1] == 0xCD &&
+              strcmp(ev.u.contact.adv_name, "RepeaterX") == 0 &&
+              ev.u.contact.last_advert == 1700000000u && ev.u.contact.adv_lat == -37000000 &&
+              ev.u.contact.adv_lon == 145000000 && ev.u.contact.lastmod == 4242u,
+              "contact record fields");
+
+        j = 0;
+        payload[j++] = MC_RESP_END_OF_CONTACTS;
+        le32(payload + j, 4242u); j += 4;
+        CHECK(feed_parse(&rx, frame, scratch, sizeof scratch, payload, j, &ev) == 1 &&
+              ev.code == MC_RESP_END_OF_CONTACTS && ev.u.contacts_lastmod == 4242u,
+              "end_of_contacts lastmod");
+
+        j = 0;
+        payload[j++] = MC_PUSH_CONTACT_DELETED;
+        for (int i = 0; i < 32; i++) payload[j++] = (uint8_t)(0x10 + i);
+        CHECK(feed_parse(&rx, frame, scratch, sizeof scratch, payload, j, &ev) == 1 &&
+              ev.code == MC_PUSH_CONTACT_DELETED && ev.u.deleted_key[31] == 0x2F,
+              "contact_deleted key");
+    }
+
+    printf("== parse: BINARY_RESPONSE + STATUS decode ==\n");
+    {
+        size_t j = 0;
+        payload[j++] = MC_PUSH_BINARY_RESP;
+        payload[j++] = 0;                       /* reserved */
+        le32(payload + j, 0xDEADBEEFu); j += 4; /* tag */
+        size_t blob = j;                        /* STATUS blob starts here */
+        le16(payload + j, 4200); j += 2;        /* bat */
+        le16(payload + j, 1); j += 2;           /* tx_queue_len */
+        le16(payload + j, (uint16_t)(int16_t)-115); j += 2;  /* noise_floor */
+        le16(payload + j, (uint16_t)(int16_t)-90);  j += 2;  /* last_rssi */
+        le32(payload + j, 1000); j += 4; le32(payload + j, 500); j += 4;   /* nb_recv, nb_sent */
+        le32(payload + j, 200); j += 4;  le32(payload + j, 3600); j += 4;  /* airtime, uptime */
+        le32(payload + j, 10); j += 4; le32(payload + j, 20); j += 4;      /* sent_flood/direct */
+        le32(payload + j, 30); j += 4; le32(payload + j, 40); j += 4;      /* recv_flood/direct */
+        le16(payload + j, 2); j += 2;           /* full_evts */
+        le16(payload + j, 36); j += 2;          /* last_snr (q4 -> 9 dB) */
+        le16(payload + j, 1); j += 2; le16(payload + j, 2); j += 2;        /* dups */
+        le32(payload + j, 150); j += 4;         /* rx_airtime */
+        le32(payload + j, 5); j += 4;           /* recv_errors */
+        CHECK(feed_parse(&rx, frame, scratch, sizeof scratch, payload, j, &ev) == 1 &&
+              ev.code == MC_PUSH_BINARY_RESP && ev.u.binary_resp.tag == 0xDEADBEEFu &&
+              ev.u.binary_resp.data_len == (uint8_t)(j - blob), "binary_resp tag + data_len");
+
+        mc_status_t st;
+        CHECK(mc_parse_status(ev.u.binary_resp.data, ev.u.binary_resp.data_len, &st) == 1 &&
+              st.bat_mv == 4200 && st.noise_floor == -115 && st.last_rssi == -90 &&
+              st.nb_recv == 1000 && st.uptime_secs == 3600 && st.last_snr_q4 == 36 &&
+              st.rx_airtime_secs == 150 && st.has_recv_errors && st.recv_errors == 5,
+              "parse_status fields");
+    }
+
     printf("== resync: garbage before a valid frame ==\n");
     uint8_t junk[3] = { 0x00, 0x99, 0x01 };
     mc_rx_feed(&rx, junk, 3);

@@ -27,6 +27,8 @@ Two layers, so the protocol is reusable and testable far beyond Arduino:
 Transport is injected; the core never touches a port. "Physical serial only" is
 simply which `Stream` you hand the wrapper.
 
+XXX Add a why - because I want control from other embedded systems, talk about how I do compile meshcore directly in and juse use a SX??? lora modem, that however uses a lot of resources and memroy and some hardware doesn't have access to enough pins to do SPI. Also I write code that runs on low level embedded linux SBC or SOC that are dependent on C. 
+
 ## Wire protocol
 
 `frame = [type:u8][len:u16 LE][payload:len bytes]`, type `0x3C` for app→radio,
@@ -150,6 +152,14 @@ cd test && cc -std=c99 -Wall -Wextra -I../src test_codec.c ../src/meshcore_compa
 
 The unit test exercises command encoding, frame reassembly across split reads,
 every parser, and resync past line garbage.
+
+## Raw Serial Port
+
+For embedded linux, windows etc, there is USB drivvers that expose a serial port we can access from the raw c. But from a bare metal (or FreeRTOS etc) embedded CPU we need TTL serial port access. To do this is relatively simple on most of the MeshCore hardware supported for Companion mode, however can't be done from online flasher.
+
+XXX How to build example, lets start with a XIAO ESP32S3 with SX1262. Minimum steps here to show somone how to do it and work out what pins can be used on that board for RX/TX
+
+And add a Arduino example (basic ESP32S3 dev) that also programs it, e.g. Name, Network to Australia Narrow band and to add a channel. Basically a zero config just plug it in and the host device sets it up how it needs. For completeness this examle code then loops watching the channel programmed and responding to any hello sent with a response.
 
 ## Notes
 

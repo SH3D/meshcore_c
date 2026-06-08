@@ -59,14 +59,36 @@ enum {
     MC_CMD_SET_DEVICE_TIME      = 6,
     MC_CMD_SEND_SELF_ADVERT     = 7,
     MC_CMD_SET_ADVERT_NAME      = 8,
+    MC_CMD_ADD_UPDATE_CONTACT   = 9,
     MC_CMD_SYNC_NEXT_MESSAGE    = 10,
     MC_CMD_SET_RADIO_PARAMS     = 11,
     MC_CMD_SET_TX_POWER         = 12,
+    MC_CMD_RESET_PATH           = 13,
+    MC_CMD_SET_ADVERT_LATLON    = 14,
+    MC_CMD_REMOVE_CONTACT       = 15,
+    MC_CMD_SHARE_CONTACT        = 16,
+    MC_CMD_EXPORT_CONTACT       = 17,
+    MC_CMD_IMPORT_CONTACT       = 18,
     MC_CMD_DEVICE_QUERY         = 22,
+    MC_CMD_GET_CONTACT_BY_KEY   = 30,
     MC_CMD_GET_CHANNEL          = 31,
     MC_CMD_SET_CHANNEL          = 32,
-    MC_CMD_GET_STATS            = 56
+    MC_CMD_SEND_BINARY_REQ      = 50,
+    MC_CMD_GET_STATS            = 56,
+    MC_CMD_SEND_ANON_REQ        = 57
 };
+
+/* ---- Binary-request subtypes (SEND_BINARY_REQ data[0]) ---- */
+enum {
+    MC_BINARY_REQ_STATUS     = 0x01,
+    MC_BINARY_REQ_KEEP_ALIVE = 0x02,
+    MC_BINARY_REQ_TELEMETRY  = 0x03,
+    MC_BINARY_REQ_MMA        = 0x04,
+    MC_BINARY_REQ_ACL        = 0x05,
+    MC_BINARY_REQ_NEIGHBOURS = 0x06
+};
+/* ---- Anonymous-request subtypes (SEND_ANON_REQ) ---- */
+enum { MC_ANON_REQ_REGIONS = 0x01, MC_ANON_REQ_OWNER = 0x02, MC_ANON_REQ_BASIC = 0x03 };
 
 /* ---- Response codes (radio -> app) ---- */
 enum {
@@ -81,7 +103,7 @@ enum {
     MC_RESP_CHANNEL_MSG_RECV = 8,
     MC_RESP_CURR_TIME        = 9,
     MC_RESP_NO_MORE_MESSAGES = 10,
-    MC_RESP_EXPORT_CONTACT   = 11,
+    MC_RESP_CONTACT_URI      = 11,     /* reply to EXPORT_CONTACT */
     MC_RESP_BATTERY_VOLTAGE  = 12,
     MC_RESP_DEVICE_INFO      = 13,
     MC_RESP_PRIVATE_KEY      = 14,
@@ -89,7 +111,10 @@ enum {
     MC_RESP_CONTACT_MSG_RECV_V3 = 16,  /* SNR-prefixed variant of code 7 */
     MC_RESP_CHANNEL_MSG_RECV_V3 = 17,  /* SNR-prefixed variant of code 8 */
     MC_RESP_CHANNEL_INFO     = 18,
+    MC_RESP_ADVERT_PATH      = 22,
     MC_RESP_STATS            = 24,
+    MC_RESP_AUTOADD_CONFIG   = 25,
+    MC_RESP_ALLOWED_REPEAT_FREQ = 26,
     MC_RESP_CHANNEL_DATA_RECV= 27
 };
 
@@ -108,9 +133,11 @@ enum {
     MC_PUSH_STATUS_RESP   = 0x87,
     MC_PUSH_LOG_RX_DATA   = 0x88,
     MC_PUSH_TRACE_DATA    = 0x89,
-    MC_PUSH_NEW_ADVERT    = 0x8A,
+    MC_PUSH_NEW_ADVERT    = 0x8A,  /* carries a full contact record */
     MC_PUSH_TELEMETRY     = 0x8B,
-    MC_PUSH_BINARY_RESP   = 0x8C
+    MC_PUSH_BINARY_RESP   = 0x8C,
+    MC_PUSH_CONTACT_DELETED = 0x8F,
+    MC_PUSH_CONTACTS_FULL   = 0x90
 };
 
 /* ---- Text message subtypes ---- */
@@ -182,6 +209,27 @@ size_t mc_cmd_send_cmd         (uint8_t *out, size_t cap, uint32_t sender_ts,
 size_t mc_cmd_set_radio_params (uint8_t *out, size_t cap, uint32_t freq_hz_x1000,
                                 uint32_t bw, uint8_t sf, uint8_t cr);
 size_t mc_cmd_get_stats        (uint8_t *out, size_t cap, uint8_t stats_type);
+
+/* ---- contacts (Phase 2) ---- */
+/* GET_CONTACTS; pass since_lastmod>0 for a delta sync, or 0 for all. */
+size_t mc_cmd_get_contacts     (uint8_t *out, size_t cap, uint32_t since_lastmod);
+size_t mc_cmd_remove_contact   (uint8_t *out, size_t cap, const uint8_t pubkey[32]);
+size_t mc_cmd_reset_path       (uint8_t *out, size_t cap, const uint8_t pubkey[32]);
+size_t mc_cmd_share_contact    (uint8_t *out, size_t cap, const uint8_t pubkey[32]);
+size_t mc_cmd_get_contact_by_key(uint8_t *out, size_t cap, const uint8_t pubkey[32]);
+/* EXPORT_CONTACT; pubkey==NULL exports this node's own card. Reply: CONTACT_URI. */
+size_t mc_cmd_export_contact   (uint8_t *out, size_t cap, const uint8_t pubkey[32]);
+size_t mc_cmd_import_contact   (uint8_t *out, size_t cap, const uint8_t *card, size_t card_len);
+
+/* ---- binary / anonymous requests (Phase 2) ---- */
+/* SEND_BINARY_REQ: dst is a full 32-byte key; req_type is MC_BINARY_REQ_*;
+ * data is the type-specific request blob (may be NULL). */
+size_t mc_cmd_send_binary_req  (uint8_t *out, size_t cap, const uint8_t dst[32],
+                                uint8_t req_type, const uint8_t *data, size_t data_len);
+size_t mc_cmd_send_anon_req    (uint8_t *out, size_t cap, const uint8_t dst[32],
+                                uint8_t req_type, const uint8_t *data, size_t data_len);
+/* mc_cmd_add_update_contact() and mc_parse_status() are declared below, after the
+ * mc_contact_t / mc_status_t struct definitions they reference. */
 
 /* ======================================================================== *
  *  Parsed events
@@ -267,6 +315,43 @@ typedef struct {
     } u;
 } mc_stats_t;
 
+/* A mesh contact, as parsed from CONTACT (3) / NEW_ADVERT (0x8A) and as built
+ * for ADD_UPDATE_CONTACT. Lat/lon are degrees x 1e6. */
+typedef struct {
+    uint8_t  public_key[32];
+    uint8_t  type;
+    uint8_t  flags;
+    uint8_t  out_path_len;
+    uint8_t  out_path[64];
+    char     adv_name[MC_NAME_LEN + 1];
+    uint32_t last_advert;
+    int32_t  adv_lat, adv_lon;
+    uint32_t lastmod;
+} mc_contact_t;
+
+/* Raw binary response (BINARY_RESPONSE push, 0x8C): a 4-byte tag matching the
+ * MsgSent.expected_ack of the request, plus opaque payload. Decode per the
+ * request type you sent (e.g. mc_parse_status for a STATUS request). */
+typedef struct {
+    uint32_t tag;
+    uint8_t  data_len;
+    uint8_t  data[MC_MAX_DATA];
+} mc_binary_resp_t;
+
+/* Decoded STATUS binary response (mc_parse_status). */
+typedef struct {
+    uint16_t bat_mv, tx_queue_len;
+    int16_t  noise_floor, last_rssi;
+    uint32_t nb_recv, nb_sent, airtime_secs, uptime_secs;
+    uint32_t sent_flood, sent_direct, recv_flood, recv_direct;
+    uint16_t full_evts;
+    int16_t  last_snr_q4;               /* divide by 4 for dB */
+    uint16_t direct_dups, flood_dups;
+    uint32_t rx_airtime_secs;
+    uint32_t recv_errors;               /* fw v1.12+; see has_recv_errors */
+    int      has_recv_errors;
+} mc_status_t;
+
 typedef struct {
     uint8_t code;               /* response or push code (first payload byte) */
     union {
@@ -278,6 +363,15 @@ typedef struct {
         mc_self_info_t    self_info;
         mc_msg_sent_t     msg_sent;         /* MC_RESP_SENT                  */
         mc_stats_t        stats;            /* MC_RESP_STATS                 */
+        mc_contact_t      contact;          /* CONTACT (3) / NEW_ADVERT      */
+        mc_binary_resp_t  binary_resp;      /* MC_PUSH_BINARY_RESP           */
+        uint32_t          contacts_count;   /* CONTACTS_START: number to come */
+        uint32_t          contacts_lastmod; /* END_OF_CONTACTS: newest lastmod*/
+        uint8_t           deleted_key[32];  /* CONTACT_DELETED               */
+        uint8_t           autoadd_config;   /* AUTOADD_CONFIG                */
+        struct { uint8_t len; uint8_t data[MC_MAX_DATA]; } contact_uri; /* CONTACT_URI */
+        struct { uint32_t timestamp; uint8_t path_len; uint8_t path[64]; } advert_path;
+        struct { uint8_t count; struct { uint32_t min, max; } pair[8]; } allowed_freq;
         uint32_t          curr_time;        /* epoch secs                    */
         uint16_t          battery_mv;
         int8_t            err_code;          /* MC_RESP_ERR (-1 if absent)    */
@@ -289,6 +383,11 @@ typedef struct {
 /* Decode one received payload. Returns 1 if recognised (ev->code set and the
  * matching union member filled), 0 if the code is unknown to this build. */
 int mc_parse(const uint8_t *payload, size_t len, mc_event_t *ev);
+
+/* Builders/parsers that reference the structs above. */
+size_t mc_cmd_add_update_contact(uint8_t *out, size_t cap, const mc_contact_t *c);
+/* Decode a STATUS binary-response payload (resp.data/.data_len). 1 on success. */
+int    mc_parse_status         (const uint8_t *data, size_t len, mc_status_t *out);
 
 #ifdef __cplusplus
 } /* extern "C" */

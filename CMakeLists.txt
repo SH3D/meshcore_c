@@ -31,6 +31,10 @@ target_link_libraries(meshcore_tty PRIVATE meshcore_companion)
 add_executable(meshcore_info examples-linux/info/meshcore_info.c)
 target_link_libraries(meshcore_info PRIVATE meshcore_companion)
 
+# Linux example: list the radio's contacts, then exit.
+add_executable(meshcore_contacts examples-linux/contacts/meshcore_contacts.c)
+target_link_libraries(meshcore_contacts PRIVATE meshcore_companion)
+
 # Host unit test for the codec (no hardware required).
 enable_testing()
 add_executable(test_codec test/test_codec.c)

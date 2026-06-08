@@ -29,6 +29,9 @@ public:
     using SelfInfoCb     = std::function<void(const mc_self_info_t&)>;
     using MsgSentCb      = std::function<void(const mc_msg_sent_t&)>;
     using StatsCb        = std::function<void(const mc_stats_t&)>;
+    using ContactCb      = std::function<void(const mc_contact_t&)>;
+    using ContactsDoneCb = std::function<void(uint32_t /*lastmod*/)>;
+    using BinaryRespCb   = std::function<void(const mc_binary_resp_t&)>;
     using EventCb        = std::function<void(const mc_event_t&)>;
 
     explicit MeshCoreCompanion(Stream &io) : _io(io) {}
@@ -61,6 +64,23 @@ public:
     void drainMessages();              /* start a manual sync-drain loop */
     void getStats(uint8_t statsType);
 
+    /* ---- contacts ---- */
+    void getContacts(uint32_t sinceLastmod = 0);   /* → onContact... then onContactsDone */
+    void addUpdateContact(const mc_contact_t &c);
+    void removeContact(const uint8_t pubkey[32]);
+    void resetPath(const uint8_t pubkey[32]);
+    void shareContact(const uint8_t pubkey[32]);
+    void getContactByKey(const uint8_t pubkey[32]);
+    void exportContact(const uint8_t pubkey[32] = nullptr);   /* nullptr = own card */
+    void importContact(const uint8_t *card, size_t len);
+
+    /* ---- binary / anonymous requests ---- */
+    void sendBinaryReq(const uint8_t dst[32], uint8_t reqType,
+                       const uint8_t *data = nullptr, size_t len = 0);
+    void sendAnonReq(const uint8_t dst[32], uint8_t reqType,
+                     const uint8_t *data = nullptr, size_t len = 0);
+    void requestStatus(const uint8_t dst[32]) { sendBinaryReq(dst, MC_BINARY_REQ_STATUS); }
+
     /* ---- behaviour ---- */
     void setAutoSync(bool on) { _autoSync = on; }
 
@@ -77,6 +97,9 @@ public:
     void onSelfInfo(SelfInfoCb cb)        { _onSelfInfo = cb; }
     void onMsgSent(MsgSentCb cb)          { _onMsgSent = cb; }
     void onStats(StatsCb cb)              { _onStats = cb; }
+    void onContact(ContactCb cb)          { _onContact2 = cb; } /* CONTACT + NEW_ADVERT */
+    void onContactsDone(ContactsDoneCb cb){ _onContactsDone = cb; }
+    void onBinaryResponse(BinaryRespCb cb){ _onBinaryResp = cb; }
     void onEvent(EventCb cb)              { _onEvent = cb; }   /* every parsed frame */
 
 private:
@@ -103,6 +126,9 @@ private:
     SelfInfoCb    _onSelfInfo;
     MsgSentCb     _onMsgSent;
     StatsCb       _onStats;
+    ContactCb     _onContact2;
+    ContactsDoneCb _onContactsDone;
+    BinaryRespCb  _onBinaryResp;
     EventCb       _onEvent;
 };
 

@@ -128,6 +128,45 @@ void MeshCoreCompanion::getStats(uint8_t statsType) {
     uint8_t p[2]; sendPayload(p, mc_cmd_get_stats(p, sizeof(p), statsType));
 }
 
+/* ---- contacts ---- */
+void MeshCoreCompanion::getContacts(uint32_t sinceLastmod) {
+    uint8_t p[5]; sendPayload(p, mc_cmd_get_contacts(p, sizeof(p), sinceLastmod));
+}
+void MeshCoreCompanion::addUpdateContact(const mc_contact_t &c) {
+    uint8_t p[1 + 32 + 1 + 1 + 1 + 64 + 32 + 4 + 4 + 4];
+    sendPayload(p, mc_cmd_add_update_contact(p, sizeof(p), &c));
+}
+void MeshCoreCompanion::removeContact(const uint8_t pubkey[32]) {
+    uint8_t p[33]; sendPayload(p, mc_cmd_remove_contact(p, sizeof(p), pubkey));
+}
+void MeshCoreCompanion::resetPath(const uint8_t pubkey[32]) {
+    uint8_t p[33]; sendPayload(p, mc_cmd_reset_path(p, sizeof(p), pubkey));
+}
+void MeshCoreCompanion::shareContact(const uint8_t pubkey[32]) {
+    uint8_t p[33]; sendPayload(p, mc_cmd_share_contact(p, sizeof(p), pubkey));
+}
+void MeshCoreCompanion::getContactByKey(const uint8_t pubkey[32]) {
+    uint8_t p[33]; sendPayload(p, mc_cmd_get_contact_by_key(p, sizeof(p), pubkey));
+}
+void MeshCoreCompanion::exportContact(const uint8_t pubkey[32]) {
+    uint8_t p[33]; sendPayload(p, mc_cmd_export_contact(p, sizeof(p), pubkey));
+}
+void MeshCoreCompanion::importContact(const uint8_t *card, size_t len) {
+    uint8_t p[MC_MAX_PAYLOAD]; sendPayload(p, mc_cmd_import_contact(p, sizeof(p), card, len));
+}
+
+/* ---- binary / anonymous requests ---- */
+void MeshCoreCompanion::sendBinaryReq(const uint8_t dst[32], uint8_t reqType,
+                                      const uint8_t *data, size_t len) {
+    uint8_t p[MC_MAX_PAYLOAD];
+    sendPayload(p, mc_cmd_send_binary_req(p, sizeof(p), dst, reqType, data, len));
+}
+void MeshCoreCompanion::sendAnonReq(const uint8_t dst[32], uint8_t reqType,
+                                    const uint8_t *data, size_t len) {
+    uint8_t p[MC_MAX_PAYLOAD];
+    sendPayload(p, mc_cmd_send_anon_req(p, sizeof(p), dst, reqType, data, len));
+}
+
 /* ---- dispatch ---- */
 void MeshCoreCompanion::dispatch(const mc_event_t &ev) {
     if (_onEvent) _onEvent(ev);
@@ -150,6 +189,16 @@ void MeshCoreCompanion::dispatch(const mc_event_t &ev) {
         break;
     case MC_RESP_STATS:
         if (_onStats) _onStats(ev.u.stats);
+        break;
+    case MC_RESP_CONTACT:
+    case MC_PUSH_NEW_ADVERT:
+        if (_onContact2) _onContact2(ev.u.contact);
+        break;
+    case MC_RESP_END_OF_CONTACTS:
+        if (_onContactsDone) _onContactsDone(ev.u.contacts_lastmod);
+        break;
+    case MC_PUSH_BINARY_RESP:
+        if (_onBinaryResp) _onBinaryResp(ev.u.binary_resp);
         break;
     case MC_PUSH_MSG_WAITING:
         if (_autoSync && !_draining) { _draining = true; syncNextMessage(); }
