@@ -46,7 +46,7 @@ public:
 
     /* ---- commands (fire-and-forget; replies arrive via callbacks) ---- */
     void appStart(const char *name = "esp32");
-    void deviceQuery(uint8_t appTargetVer = 1);
+    void deviceQuery(uint8_t appTargetVer = 3);   /* 3 = request V3 frames (SNR+RSSI) */
     void getDeviceTime();
     void setDeviceTime(uint32_t epochSecs);
     void sendSelfAdvert(bool flood = true);

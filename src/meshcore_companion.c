@@ -46,6 +46,7 @@ static int parse_channel_text(const uint8_t *b, size_t n, int v3, mc_channel_msg
     m->txt_type    = q[2];
     m->sender_ts   = get_u32(q + 3);
     m->snr_q4      = v3 ? (int8_t)b[0] : MC_SNR_NONE;
+    m->rssi        = v3 ? (int8_t)b[1] : MC_RSSI_NONE;   /* V3 lead: [snr][rssi][?] */
     copy_rest_string(m->text, sizeof(m->text), q, 7, qn);
     return 1;
 }
@@ -63,6 +64,7 @@ static int parse_contact_text(const uint8_t *b, size_t n, int v3, mc_contact_msg
     m->txt_type  = q[7];
     m->sender_ts = get_u32(q + 8);
     m->snr_q4    = v3 ? (int8_t)b[0] : MC_SNR_NONE;
+    m->rssi      = v3 ? (int8_t)b[1] : MC_RSSI_NONE;   /* V3 lead: [snr][rssi][?] */
     size_t toff = 12;
     if (m->txt_type == MC_TXT_SIGNED_PLAIN && qn >= toff + 4) {
         memcpy(m->signature, q + toff, 4);
@@ -148,7 +150,7 @@ size_t mc_cmd_app_start(uint8_t *out, size_t cap, const char *app_name) {
     if (cap < total) return 0;
     size_t i = 0;
     out[i++] = MC_CMD_APP_START;
-    out[i++] = 1;                       /* app version */
+    out[i++] = 3;                       /* app version (3 = accept V3 frames with SNR+RSSI) */
     memset(out + i, 0, 6); i += 6;      /* reserved */
     memcpy(out + i, app_name, nlen); i += nlen;
     return i;

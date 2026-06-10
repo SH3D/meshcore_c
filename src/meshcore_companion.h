@@ -154,6 +154,8 @@ enum { MC_ADVERT_ZERO_HOP = 0, MC_ADVERT_FLOOD = 1 };
 #define MC_SNR_DB(q4)  ((float)(q4) / 4.0f)
 /* snr_q4 sentinel for non-V3 messages that carry no SNR. */
 #define MC_SNR_NONE    ((int8_t)-128)
+/* rssi sentinel for non-V3 messages that carry no RSSI (0 dBm never occurs). */
+#define MC_RSSI_NONE   ((int8_t)0)
 
 /* ======================================================================== *
  *  Receive side: streaming frame assembler
@@ -262,6 +264,7 @@ typedef struct {
     uint8_t  txt_type;
     uint32_t sender_ts;
     int8_t   snr_q4;            /* V3 only (code 17); MC_SNR_NONE otherwise */
+    int8_t   rssi;              /* dBm; V3 only (code 17); MC_RSSI_NONE otherwise */
     char     text[MC_MAX_TEXT]; /* for channel msgs this is "Name: body" */
 } mc_channel_msg_t;
 
@@ -280,6 +283,7 @@ typedef struct {
     uint8_t  txt_type;
     uint32_t sender_ts;
     int8_t   snr_q4;            /* V3 only (code 16); MC_SNR_NONE otherwise   */
+    int8_t   rssi;              /* dBm; V3 only (code 16); MC_RSSI_NONE otherwise */
     uint8_t  signature[4];      /* present when txt_type==MC_TXT_SIGNED_PLAIN */
     int      has_signature;
     char     text[MC_MAX_TEXT];
