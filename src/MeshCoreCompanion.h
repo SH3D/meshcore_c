@@ -105,6 +105,10 @@ public:
     void onContactsDone(ContactsDoneCb cb){ _onContactsDone = cb; }
     void onBinaryResponse(BinaryRespCb cb){ _onBinaryResp = cb; }
     void onEvent(EventCb cb)              { _onEvent = cb; }   /* every parsed frame */
+    /* Raw frames the parser did NOT recognise (payload incl. code byte).  For
+     * diagnosing firmware/protocol mismatches — normally unused. */
+    using RawCb = std::function<void(const uint8_t* payload, size_t len)>;
+    void onUnparsedFrame(RawCb cb)        { _onUnparsed = cb; }
 
 private:
     void sendPayload(const uint8_t *payload, size_t len);
@@ -134,6 +138,7 @@ private:
     ContactsDoneCb _onContactsDone;
     BinaryRespCb  _onBinaryResp;
     EventCb       _onEvent;
+    RawCb         _onUnparsed;
 };
 
 #endif /* MESHCORE_COMPANION_HPP */

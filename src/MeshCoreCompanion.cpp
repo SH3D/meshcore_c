@@ -32,6 +32,7 @@ void MeshCoreCompanion::loop() {
     while (mc_rx_poll(&_rx, _scratch, sizeof(_scratch), &olen)) {
         mc_event_t ev;
         if (mc_parse(_scratch, olen, &ev)) dispatch(ev);
+        else if (_onUnparsed) _onUnparsed(_scratch, olen);   /* frame we couldn't decode */
     }
 }
 
@@ -121,7 +122,11 @@ void MeshCoreCompanion::syncNextMessage() {
 }
 
 void MeshCoreCompanion::drainMessages() {
-    if (!_draining) { _draining = true; syncNextMessage(); }
+    // Always (re)issue a sync — recovers a wedged drain (a lost reply leaving
+    // _draining stuck true), not only when idle.  Safe to call periodically:
+    // the radio answers each sync with the next queued message or NoMoreMessages.
+    _draining = true;
+    syncNextMessage();
 }
 
 void MeshCoreCompanion::getStats(uint8_t statsType) {
@@ -217,7 +222,12 @@ void MeshCoreCompanion::dispatch(const mc_event_t &ev) {
         if (_onBinaryResp) _onBinaryResp(ev.u.binary_resp);
         break;
     case MC_PUSH_MSG_WAITING:
-        if (_autoSync && !_draining) { _draining = true; syncNextMessage(); }
+        // Always (re)start the drain on a MsgWaiting push.  If a prior sync
+        // reply was lost (e.g. the host stalled and its UART RX overflowed),
+        // _draining can be left stuck true; gating on !_draining would then
+        // ignore every later push and silently stop pulling messages.
+        // Re-kicking unconditionally self-heals that.
+        if (_autoSync) { _draining = true; syncNextMessage(); }
         break;
     case MC_RESP_CHANNEL_MSG_RECV:
     case MC_RESP_CHANNEL_MSG_RECV_V3:
